@@ -4,14 +4,6 @@ import { Link } from 'react-router-dom';
 export default function LandingPage() {
   return (
     <div className="font-sans text-gray-900 min-h-screen bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-50 via-white to-orange-50">
-      
-      {/* Fixed Top Container for Notification & Header */}
-      <div className="fixed w-full top-0 z-50">
-        {/* Sleek Alert Banner */}
-        <div className="bg-indigo-950 text-indigo-100 text-sm py-2.5 font-medium tracking-wide flex justify-center items-center gap-2 px-4 text-center">
-          <AlertCircle size={16} className="text-indigo-300" />
-          <span>⚠️ Notification: Social Audit is mandatory for 2026 compliance. Monthly reports must be generated before the 5th.</span>
-        </div>
 
         {/* Glassmorphism Header */}
         <header className="bg-white/70 backdrop-blur-md border-b border-white/20 shadow-sm px-4 py-4 flex items-center justify-between">
