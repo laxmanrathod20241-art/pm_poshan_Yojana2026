@@ -27,6 +27,7 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
     '/monthly': 'Monthly ZP Report',
     '/daily-ledger': 'Daily Ledger (खतावणी)',
     '/item-ledger': 'Item Ledger (वस्तुनिहाय साठा)',
+    '/credit-ledger': 'Credit Ledger (उसणे धान्य)',
     '/daily-log': 'Daily Consumption Log'
   };
   const currentPageTitle = pageTitles[location.pathname] || 'PM-POSHAN Tracker';
@@ -173,6 +174,19 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
                       }`}
                     >
                       Item Ledger (वस्तुनिहाय साठा)
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
+                      to="/credit-ledger"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className={`block p-3.5 rounded-xl text-[13px] shadow-sm transition-all border ${
+                        location.pathname === '/credit-ledger'
+                          ? 'bg-amber-100 text-amber-900 border-l-4 border-amber-600 border-y-transparent border-r-transparent font-black'
+                          : 'text-amber-700 bg-amber-50 border-amber-100 hover:bg-amber-100 hover:border-amber-300 font-bold'
+                      }`}
+                    >
+                      Credit Ledger (उसणे धान्य)
                     </Link>
                   </li>
                   <li>

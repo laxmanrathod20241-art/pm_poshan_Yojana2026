@@ -68,7 +68,7 @@ export default function TeacherDashboard() {
 
       const { data, error } = await (supabase as any)
         .from('daily_logs')
-        .select('log_date, meals_served_primary, meals_served_upper_primary')
+        .select('log_date, meals_served_primary, meals_served_upper_primary, is_holiday')
         .eq('teacher_id', userId)
         .gte('log_date', startOfMonth)
         .lte('log_date', endOfMonth);
@@ -227,15 +227,15 @@ export default function TeacherDashboard() {
               )}
             </div>
 
-            {/* Advanced Inventory Longevity Alerts */}
+            {/* Advanced Inventory Longevity Alerts & Debt Warning */}
             <div className="bg-white border shadow-sm overflow-hidden">
               <button 
                 onClick={() => setIsInventoryOpen(!isInventoryOpen)}
                 className="w-full px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors border-b border-slate-100"
               >
                 <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                  <AlertCircle size={16} className={criticalItems.length > 0 ? "text-[#dd4b39]" : "text-green-600"} /> 
-                  Inventory Status
+                  <AlertCircle size={16} className={inventoryItems.some(i => Number(i.current_balance) < 0) ? "text-red-600 animate-pulse" : criticalItems.length > 0 ? "text-[#dd4b39]" : "text-green-600"} /> 
+                  Inventory & Debt Health
                 </h3>
                 {isInventoryOpen ? <ChevronUp size={20} className="text-slate-400" /> : <ChevronDown size={20} className="text-slate-400" />}
               </button>
@@ -244,12 +244,20 @@ export default function TeacherDashboard() {
                 <div className="p-4 bg-slate-50/30">
                   <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
                     {inventoryItems.map((item: any) => {
+                      const balance = Number(item.current_balance);
                       const grams = foodGramsMap[item.item_name] || { primary: 100, upper: 150 };
                       const dailyRequirement = (enrollment.primary * grams.primary + enrollment.upper * grams.upper) / 1000;
-                      const daysRemaining = dailyRequirement > 0 ? (Number(item.current_balance) / dailyRequirement) : Infinity;
+                      const daysRemaining = dailyRequirement > 0 ? (balance / dailyRequirement) : Infinity;
 
                       let colorClasses = "bg-green-50 border-green-200 text-green-800";
-                      if (daysRemaining <= 2) {
+                      let statusText = daysRemaining === Infinity ? 'पुरेसा साठा' : `~${Math.floor(daysRemaining)} दिवस पुरेल`;
+                      let unitText = "kg";
+
+                      if (balance < 0) {
+                        colorClasses = "bg-red-50 border-red-500 text-red-600 ring-1 ring-red-100";
+                        statusText = "उसणे धान्य (Debt)";
+                        unitText = "kg borrowed";
+                      } else if (daysRemaining <= 2) {
                         colorClasses = "bg-red-50 border-red-300 text-red-800";
                       } else if (daysRemaining <= 10) {
                         colorClasses = "bg-yellow-50 border-yellow-300 text-yellow-800";
@@ -257,11 +265,16 @@ export default function TeacherDashboard() {
 
                       return (
                         <div key={item.id} className={`p-4 rounded-xl border-2 shadow-sm flex flex-col justify-between transition-all hover:scale-[1.02] ${colorClasses}`}>
-                          <h4 className="font-black text-[11px] uppercase mb-2 truncate">{item.item_name}</h4>
+                          <h4 className="font-black text-[11px] uppercase mb-2 truncate flex items-center gap-1">
+                            {balance < 0 && <AlertCircle size={10} />} {item.item_name}
+                          </h4>
                           <div>
-                            <div className="text-xl font-black">{Number(item.current_balance).toFixed(2)} <span className="text-[10px]">kg</span></div>
-                            <div className="text-[9px] font-bold uppercase tracking-widest mt-1 opacity-80">
-                              {daysRemaining === Infinity ? 'पुरेसा साठा' : `~${Math.floor(daysRemaining)} दिवस पुरेल`}
+                            <div className="text-xl font-black">
+                              {balance < 0 ? `-${Math.abs(balance).toFixed(2)}` : balance.toFixed(2)} 
+                              <span className="text-[10px] ml-1">{unitText}</span>
+                            </div>
+                            <div className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-80">
+                              {statusText}
                             </div>
                           </div>
                         </div>
@@ -276,10 +289,15 @@ export default function TeacherDashboard() {
 
               {!isInventoryOpen && (
                 <div className="px-5 py-3 flex items-center justify-between">
-                  <p className="text-[11px] font-bold text-slate-500 uppercase">
-                    {criticalItems.length > 0 ? `⚠️ ${criticalItems.length} items require attention` : "✅ All stock levels nominal"}
-                  </p>
-                  <button onClick={() => setIsInventoryOpen(true)} className="text-[10px] font-black text-blue-600 uppercase hover:underline">View Grid</button>
+                  <div className="flex gap-2">
+                    {inventoryItems.some(i => Number(i.current_balance) < 0) && (
+                      <span className="text-[9px] font-black bg-red-600 text-white px-2 py-0.5 rounded shadow-sm animate-pulse">DEBT ALERT</span>
+                    )}
+                    <p className="text-[11px] font-bold text-slate-500 uppercase">
+                      {criticalItems.length > 0 ? `⚠️ ${criticalItems.length} items require attention` : "✅ All stock levels nominal"}
+                    </p>
+                  </div>
+                  <button onClick={() => setIsInventoryOpen(true)} className="text-[10px] font-black text-blue-600 uppercase hover:underline">View Health Grid</button>
                 </div>
               )}
             </div>
@@ -329,6 +347,10 @@ export default function TeacherDashboard() {
                     <div className="w-2 h-2 rounded-full bg-[#dd4b39]"></div>
                     <span className="text-[9px] font-black text-slate-500 uppercase">Pending</span>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-yellow-400"></div>
+                    <span className="text-[9px] font-black text-slate-500 uppercase">शासकीय सुट्टी (Holiday)</span>
+                  </div>
                 </div>
               </div>
 
@@ -338,9 +360,9 @@ export default function TeacherDashboard() {
                     <Loader2 className="animate-spin text-blue-500" size={32} />
                   </div>
                 ) : (
-                  <div className="grid grid-cols-7 gap-1.5">
+                  <div className="grid grid-cols-7 gap-1 md:gap-2 auto-rows-fr">
                     {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                      <div key={day} className="text-center text-[9px] font-black text-slate-400 uppercase tracking-tighter pb-1.5">{day}</div>
+                      <div key={day} className="text-center text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-tighter pb-1.5">{day}</div>
                     ))}
                     {(() => {
                       const now = new Date();
@@ -350,13 +372,14 @@ export default function TeacherDashboard() {
                       const slots = [];
 
                       for (let i = 0; i < firstDayOfMonth; i++) {
-                        slots.push(<div key={`pad-${i}`} className="h-20 bg-slate-50 border border-slate-100/50"></div>);
+                        slots.push(<div key={`pad-${i}`} className="aspect-square md:aspect-auto md:min-h-[100px] h-full w-full bg-slate-50/50 border border-transparent rounded-md"></div>);
                       }
 
                       for (let d = 1; d <= daysInMonth; d++) {
                         const dateStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const matchedLog = dailyLogsData.find((log: any) => log.log_date === dateStr);
                         const isSubmitted = !!matchedLog;
+                        const isHoliday = matchedLog?.is_holiday || false;
                         const totalMeals = matchedLog ? (Number(matchedLog.meals_served_primary) || 0) + (Number(matchedLog.meals_served_upper_primary) || 0) : 0;
                         const isToday = dateStr === today;
                         const isPast = dateStr < today;
@@ -366,7 +389,11 @@ export default function TeacherDashboard() {
                         let statusText = "-";
                         let labelStyle = "text-slate-400";
 
-                        if (isSubmitted) {
+                        if (isHoliday) {
+                          style = "bg-yellow-400 border-yellow-500 text-red-600 shadow-md shadow-yellow-100 font-bold";
+                          statusText = "शासकीय सुट्टी";
+                          labelStyle = "text-red-600";
+                        } else if (isSubmitted) {
                           style = "bg-[#00a65a] border-[#00a65a] text-white shadow-md shadow-green-200";
                           statusText = "LOGGED";
                           labelStyle = "text-white/80";
@@ -394,23 +421,33 @@ export default function TeacherDashboard() {
                               setSelectedLogDate(dateStr);
                               setIsLogModalOpen(true);
                             }}
-                            className={`h-20 border flex flex-col items-center justify-center transition-all ${isFuture ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:scale-105 active:scale-95'} ${style}`}
+                            className={`aspect-square md:aspect-auto md:min-h-[100px] h-full w-full border flex flex-col justify-between items-center p-1 md:p-2 rounded-md transition-all overflow-hidden ${isFuture ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:scale-105 active:scale-95'} ${style}`}
                           >
-                            {isSubmitted ? (
-                              <div className="text-center">
-                                <div className="text-[9px] font-bold uppercase tracking-widest opacity-80 mb-0.5">Logged</div>
-                                <div className="text-sm font-black flex items-center justify-center gap-1">
-                                  🥘 {totalMeals}
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                <span className="text-sm font-black tracking-tighter">{d}</span>
-                                <span className={`text-[8px] md:text-[9px] uppercase font-black tracking-tighter mt-0.5 ${labelStyle}`}>
-                                  {statusText}
+                            {/* TOP: The Date Badge */}
+                            <div className={`w-5 h-5 md:w-6 md:h-6 flex items-center justify-center rounded-sm text-[10px] md:text-xs font-black ${isSubmitted || isToday || (isPast && statusText === 'MISSING') ? 'bg-white/20' : 'bg-slate-100'}`}>
+                              {d}
+                            </div>
+
+                            {/* MIDDLE: Status Text */}
+                            <div className={`text-[7px] md:text-[10px] font-bold uppercase tracking-tighter w-full text-center truncate ${labelStyle}`}>
+                              {isHoliday ? (
+                                <span className="flex flex-col items-center">
+                                  <span className="md:hidden">सुट्टी</span>
+                                  <span className="hidden md:inline">शासकीय सुट्टी</span>
                                 </span>
-                              </>
-                            )}
+                              ) : (
+                                statusText
+                              )}
+                            </div>
+
+                            {/* BOTTOM: Attendance / Count Badge */}
+                            <div className="w-full bg-black/10 rounded-sm py-0.5 flex items-center justify-center gap-1 text-[8px] md:text-xs font-black">
+                              {isSubmitted && !isHoliday && totalMeals > 0 ? (
+                                <>🥘 {totalMeals}</>
+                              ) : (
+                                <span className="opacity-40">-</span>
+                              )}
+                            </div>
                           </div>
                         );
                       }

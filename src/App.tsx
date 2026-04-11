@@ -16,6 +16,7 @@ import StockDemandReport from './pages/StockDemandReport'
 import MonthlyReport from './pages/MonthlyReport'
 import DailyLedgerReport from './pages/DailyLedgerReport'
 import ItemLedgerReport from './pages/ItemLedgerReport'
+import CreditLedgerReport from './pages/CreditLedgerReport'
 import { supabase } from './lib/supabaseClient'
 
 function AppRoutes() {
@@ -113,6 +114,7 @@ function AppRoutes() {
         <Route path="/monthly" element={<MonthlyReport />} />
         <Route path="/daily-ledger" element={<DailyLedgerReport />} />
         <Route path="/item-ledger" element={<ItemLedgerReport />} />
+        <Route path="/credit-ledger" element={<CreditLedgerReport />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );

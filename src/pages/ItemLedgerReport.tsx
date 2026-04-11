@@ -122,14 +122,16 @@ export default function ItemLedgerReport() {
       let currentOpening = 0;
       
       let grandReceived = 0;
+      let grandBorrowed = 0;
       let grandConsumed = 0;
       
       for (let i = 0; i < generatedMonths.length; i++) {
          const dm = generatedMonths[i];
          const key = `${dm.year}-${dm.month}`;
+         let mFoundOpening = 0;
          let mReceived = 0;
          let mConsumed = 0;
-         let mFoundOpening = 0;
+         let mBorrowed = 0;
 
          if (reportsMap.has(key)) {
             const rawData = reportsMap.get(key).report_data;
@@ -140,23 +142,23 @@ export default function ItemLedgerReport() {
                mFoundOpening = Number(itemMatch.openingBalance) || 0;
                mReceived = Number(itemMatch.received) || 0;
                mConsumed = Number(itemMatch.consumed) || 0;
+               mBorrowed = Number(itemMatch.borrowed) || 0;
             }
          }
 
          if (i === 0) {
-            // Force first month's opening to be whatever was in the monthly report
             currentOpening = mFoundOpening;
          }
 
          const received = mReceived;
-         const borrowed = 0;
+         const borrowed = mBorrowed;
          const total = currentOpening + received + borrowed;
          
          const consumed = mConsumed;
-         const returned = 0;
+         const returned = 0; // Return/Repayment is currently implicit in balance
          const totalExpense = consumed + returned;
          
-         const closing = Math.max(0, total - totalExpense);
+         const closing = total - totalExpense;
 
          matrix.push({
             monthId: key,
@@ -171,25 +173,21 @@ export default function ItemLedgerReport() {
          });
 
          grandReceived += received;
+         grandBorrowed += borrowed;
          grandConsumed += consumed;
 
-         // Pass forward the chain
          currentOpening = closing;
       }
       
-      // Sums for the "Total" column
-      // To create perfect mathematical unity on the Grand Total column:
-      // Opening = Month 1 opening
-      // Closing = Month N closing
       const gtOpening = matrix.length > 0 ? Number(matrix[0].opening) : 0;
-      const gtTotal = gtOpening + grandReceived;
-      const gtExpense = grandConsumed; // + 0 returned
+      const gtTotal = gtOpening + grandReceived + grandBorrowed;
+      const gtExpense = grandConsumed; 
       const gtClosing = gtTotal - gtExpense;
 
       const finalTotals = {
          opening: gtOpening.toFixed(3),
          received: grandReceived.toFixed(3),
-         borrowed: '0.000',
+         borrowed: grandBorrowed.toFixed(3),
          total: gtTotal.toFixed(3),
          consumed: grandConsumed.toFixed(3),
          returned: '0.000',

@@ -39,7 +39,7 @@ export default function StockDemandReport() {
       }
     };
     fetchSessionAndData();
-  }, [classGroup]); // Refetch/recalc when class group toggles
+  }, [classGroup, fromMonth, fromYear]); // Refetch/recalc when parameters change
 
   // Auto-Calculation Engine with Rounding
   useEffect(() => {
@@ -62,6 +62,10 @@ export default function StockDemandReport() {
   const fetchReportData = async (id: string) => {
     setLoading(true);
     try {
+      // 0. Parse Dates for Historical Reconstruction
+      const fromMonthIndex = marathiMonths.indexOf(fromMonth);
+      const cutoffDate = `${fromYear}-${String(fromMonthIndex + 1).padStart(2, '0')}-01`;
+
       // 1. Fetch Profile for School Details
       const { data: profile } = await (supabase as any)
         .from('profiles')
@@ -79,49 +83,66 @@ export default function StockDemandReport() {
         .from('student_enrollment')
         .select('*')
         .eq('teacher_id', id)
-        .maybeSingle(); // Switch to maybeSingle because single() throws if no rows found
+        .maybeSingle();
 
       if (enrollment) {
-        if (classGroup === 'PRIMARY') {
-          const sum = (Number(enrollment.std_1) || 0) +
-            (Number(enrollment.std_2) || 0) +
-            (Number(enrollment.std_3) || 0) +
-            (Number(enrollment.std_4) || 0) +
-            (Number(enrollment.std_5) || 0);
-          setEnrollmentCount(sum);
-        } else {
-          const sum = (Number(enrollment.std_6) || 0) +
-            (Number(enrollment.std_7) || 0) +
-            (Number(enrollment.std_8) || 0);
-          setEnrollmentCount(sum);
-        }
+        const sum = classGroup === 'PRIMARY' 
+          ? (Number(enrollment.std_1) || 0) + (Number(enrollment.std_2) || 0) + (Number(enrollment.std_3) || 0) + (Number(enrollment.std_4) || 0) + (Number(enrollment.std_5) || 0)
+          : (Number(enrollment.std_6) || 0) + (Number(enrollment.std_7) || 0) + (Number(enrollment.std_8) || 0);
+        setEnrollmentCount(sum);
       } else {
         setEnrollmentCount(0);
       }
 
-      // 3. Fetch Real-time Inventory Balances
-      const { data: inventory } = await (supabase as any)
-        .from('inventory_stock')
-        .select('*')
-        .eq('teacher_id', id);
-
-      if (inventory) {
-        const balances: Record<string, number> = {};
-        inventory.forEach((inv: any) => {
-          balances[inv.item_name] = Number(inv.current_balance) || 0;
-        });
-        setInventoryBalances(balances);
-      }
-
-      // 4. Fetch Configured Menu Items and Grammages
+      // 3. Fetch Configured Menu Items and Grammages
       const { data: menu } = await (supabase as any)
         .from('menu_master')
         .select('*')
         .eq('teacher_id', id);
 
-      if (menu) {
-        setMenuItems(menu);
-      }
+      const items = menu || [];
+      setMenuItems(items);
+
+      // 4. HISTORICAL RECONSTRUCTION (TIME-TRAVEL)
+      // A. Fetch All Receipts before Cutoff
+      const { data: historicalReceipts } = await (supabase as any)
+        .from('stock_receipts')
+        .select('item_name, quantity_kg')
+        .eq('teacher_id', id)
+        .lt('receipt_date', cutoffDate);
+
+      // B. Fetch All Consumption Logs before Cutoff
+      const { data: historicalConsumption } = await (supabase as any)
+        .from('consumption_logs')
+        .select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used')
+        .eq('teacher_id', id)
+        .lt('log_date', cutoffDate);
+
+      const reconcilation: Record<string, number> = {};
+      
+      // Seed with receipts
+      (historicalReceipts || []).forEach((r: any) => {
+        reconcilation[r.item_name] = (reconcilation[r.item_name] || 0) + Number(r.quantity_kg);
+      });
+
+      // Subtract consumption
+      (historicalConsumption || []).forEach((c: any) => {
+        const pAtt = Number(c.meals_served_primary) || 0;
+        const uAtt = Number(c.meals_served_upper_primary) || 0;
+        const usedItems = Array.from(new Set([...(c.main_foods_all || []), ...(c.ingredients_used || [])])).filter(Boolean);
+
+        usedItems.forEach((itemName: any) => {
+          const itemMaster = items.find((m: any) => m.item_name === itemName);
+          if (itemMaster) {
+            const gP = Number(itemMaster.grams_primary) || 0;
+            const gU = Number(itemMaster.grams_upper_primary) || 0;
+            const consumedKg = ((pAtt * gP) + (uAtt * gU)) / 1000;
+            reconcilation[itemName] = (reconcilation[itemName] || 0) - consumedKg;
+          }
+        });
+      });
+
+      setInventoryBalances(reconcilation);
 
     } catch (error) {
       console.error('Error fetching demand report data', error);

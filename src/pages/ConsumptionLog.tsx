@@ -7,10 +7,9 @@ import {
   AlertTriangle,
   Utensils,
   ArrowRight,
-  TrendingDown,
   Loader2,
   RefreshCcw,
-  X
+  Trash2
 } from 'lucide-react';
 
 export default function ConsumptionLog() {
@@ -18,11 +17,24 @@ export default function ConsumptionLog() {
   const [loading, setLoading] = useState(false);
   const [primaryCount, setPrimaryCount] = useState<number | ''>('');
   const [upperCount, setUpperCount] = useState<number | ''>('');
-  const [todayMenu, setTodayMenu] = useState<any>(null);
+  
+  // Master Data & Template Logic
+  const [masterMainFoods, setMasterMainFoods] = useState<any[]>([]);
+  const [masterIngredients, setMasterIngredients] = useState<any[]>([]);
+  const [scheduledMenu, setScheduledMenu] = useState<{ mainFoods: string[], ingredients: string[] } | null>(null);
+  
+  // Form State (The Override Layer)
+  const [localMainFoods, setLocalMainFoods] = useState<string[]>([]);
+  const [localIngredients, setLocalIngredients] = useState<string[]>([]);
+  
   const [inventory, setInventory] = useState<any[]>([]);
   const [status, setStatus] = useState({ type: '', text: '' });
+  
+  // Borrowed Stock States
+  const [showBorrowedModal, setShowBorrowedModal] = useState(false);
+  const [deficitItems, setDeficitItems] = useState<{name: string, deficit: number}[]>([]);
 
-  // PM-POSHAN Standard Grams per Student (Placeholder values - typically 100g/150g)
+  // PM-POSHAN Standard Grams per Student
   const GRAMS_PRIMARY = 100;
   const GRAMS_UPPER = 150;
 
@@ -38,133 +50,259 @@ export default function ConsumptionLog() {
     }
   }, [userId]);
 
+  const [isEditing, setIsEditing] = useState(false);
+  const [enrollment, setEnrollment] = useState({ primary: 0, upper: 0 });
+
   const fetchMenuAndStock = async () => {
+    if (!userId) return;
     setLoading(true);
     try {
-      const now = new Date();
-      const dayOfWeek = now.getDay(); // 0 (Sun) to 6 (Sat)
+      const todayStr = new Date().toISOString().split('T')[0];
+      const dayOfWeek = new Date().getDay(); 
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const stringDay = dayNames[dayOfWeek];
       
-      // 1. Fetch Master Items for Dropdowns and Chip Labels
-      const { data: menuData } = await (supabase as any)
-        .from('menu_master')
-        .select('item_code, item_name, item_category')
-        .eq('teacher_id', userId);
+      const startDate = new Date(new Date().getFullYear(), 0, 1);
+      const days = Math.floor((new Date().getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
+      const weekNumber = Math.ceil(days / 7);
+      const scheduleType = weekNumber % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
 
-      if (menuData) {
-        setMasterMainFoods(menuData.filter((i: any) => i.item_category === 'MAIN'));
-        setMasterIngredients(menuData.filter((i: any) => i.item_category === 'INGREDIENT'));
+      const [menuRes, masterRes, enrollmentRes, existingRes] = await Promise.all([
+        (supabase as any).from('menu_weekly_schedule').select('*').eq('teacher_id', userId).eq('day_name', stringDay).eq('week_pattern', scheduleType).eq('is_active', true).maybeSingle(),
+        (supabase as any).from('menu_master').select('item_code, item_name, item_category').eq('teacher_id', userId),
+        (supabase as any).from('student_enrollment').select('*').eq('teacher_id', userId).maybeSingle(),
+        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).maybeSingle()
+      ]);
+
+      if (masterRes.data) {
+        setMasterMainFoods(masterRes.data.filter((i: any) => i.item_category === 'MAIN'));
+        setMasterIngredients(masterRes.data.filter((i: any) => i.item_category === 'INGREDIENT'));
       }
 
-      // 2. Fetch Scheduled Menu for Today
-      // The prompt specified 'weekly_schedule' and 'day_of_week'
-      const { data: schedule } = await (supabase as any)
-        .from('weekly_schedule')
-        .select('*')
-        .eq('teacher_id', userId)
-        .eq('day_of_week', dayOfWeek)
-        .single();
+      if (enrollmentRes.data) {
+        const e = enrollmentRes.data;
+        setEnrollment({
+          primary: (e.std_1 || 0) + (e.std_2 || 0) + (e.std_3 || 0) + (e.std_4 || 0) + (e.std_5 || 0),
+          upper: (e.std_6 || 0) + (e.std_7 || 0) + (e.std_8 || 0)
+        });
+      }
 
-      if (schedule) {
-        // Resolve IDs to names for the UI chips
-        const scheduledIngredients = (schedule.ingredients || []).map((code: string) => {
-          const item = menuData?.find(m => m.item_code === code);
+      let template: any = null;
+      if (menuRes.data) {
+        const scheduledMainFoods = (menuRes.data.main_food_codes || []).map((code: string) => {
+          const item = masterRes.data?.find((m: any) => m.item_code === code);
           return item ? item.item_name : code;
         });
-
-        const initialSchedule = {
-          mainFood: schedule.main_food || '',
-          ingredients: scheduledIngredients
-        };
-
-        setScheduledMenu(initialSchedule);
-        
-        // Clone to Instance (Override Layer)
-        setSelectedMainFood(initialSchedule.mainFood);
-        setActiveIngredients(initialSchedule.ingredients);
+        const scheduledIngredients = (menuRes.data.menu_items || []).map((code: string) => {
+          const item = masterRes.data?.find((m: any) => m.item_code === code);
+          return item ? item.item_name : code;
+        });
+        template = { mainFoods: scheduledMainFoods, ingredients: scheduledIngredients };
+        setScheduledMenu(template);
       }
 
-      // 3. Fetch Stock
-      const { data: stock } = await (supabase as any)
-        .from('inventory_stock')
-        .select('*')
-        .eq('teacher_id', userId);
+      if (existingRes.data) {
+        setIsEditing(true);
+        setPrimaryCount(existingRes.data.meals_served_primary || '');
+        setUpperCount(existingRes.data.meals_served_upper_primary || '');
+        setLocalMainFoods(existingRes.data.main_foods_all || (existingRes.data.main_food ? [existingRes.data.main_food] : []));
+        setLocalIngredients(existingRes.data.ingredients_used || []);
+      } else if (template) {
+        setIsEditing(false);
+        setLocalMainFoods(template.mainFoods);
+        setLocalIngredients(template.ingredients);
+      }
 
+      const { data: stock } = await (supabase as any).from('inventory_stock').select('*').eq('teacher_id', userId);
       setInventory(stock || []);
     } catch (err: any) {
-      console.error(err);
+      console.error('Fetch Error:', err);
     } finally {
       setLoading(false);
     }
   };
 
+  const handleRemoveMainFood = (name: string) => {
+    setLocalMainFoods(prev => prev.filter(i => i !== name));
+  };
+
+  const handleAddMainFood = (name: string) => {
+    if (name && !localMainFoods.includes(name)) {
+      setLocalMainFoods(prev => [...prev, name]);
+    }
+  };
+
   const handleRemoveIngredient = (name: string) => {
-    setActiveIngredients(prev => prev.filter(i => i !== name));
+    setLocalIngredients(prev => prev.filter(i => i !== name));
+  };
+
+  const handleAddIngredient = (name: string) => {
+    if (name && !localIngredients.includes(name)) {
+      setLocalIngredients(prev => [...prev, name]);
+    }
   };
 
   const handleReset = () => {
     if (scheduledMenu) {
-      setSelectedMainFood(scheduledMenu.mainFood);
-      setActiveIngredients(scheduledMenu.ingredients);
+      setLocalMainFoods(scheduledMenu.mainFoods);
+      setLocalIngredients(scheduledMenu.ingredients);
     }
   };
 
   const isOverridden = scheduledMenu && (
-    selectedMainFood !== scheduledMenu.mainFood ||
-    JSON.stringify([...activeIngredients].sort()) !== JSON.stringify([...scheduledMenu.ingredients].sort())
+    JSON.stringify([...localMainFoods].sort()) !== JSON.stringify([...scheduledMenu.mainFoods].sort()) ||
+    JSON.stringify([...localIngredients].sort()) !== JSON.stringify([...scheduledMenu.ingredients].sort())
   );
 
   const calculateRequirement = () => {
     if (!primaryCount && !upperCount) return 0;
     const totalGrams = (Number(primaryCount || 0) * GRAMS_PRIMARY) + (Number(upperCount || 0) * GRAMS_UPPER);
-    return totalGrams / 1000; // KG
+    return totalGrams / 1000; 
   };
 
   const handleProcessConsumption = async () => {
-    if (!todayMenu) {
-      setStatus({ type: 'error', text: 'No menu scheduled for today. Please set your Weekly Schedule first.' });
+    if (localMainFoods.length === 0) {
+      const msg = 'कृपया मुख्य आहार निवडा.';
+      alert(msg);
+      setStatus({ type: 'error', text: msg });
       return;
     }
     if (!primaryCount && !upperCount) {
-      setStatus({ type: 'error', text: 'Please enter attendance counts.' });
+      const msg = 'कृपया विद्यार्थ्यांची उपस्थिती प्रविष्ट करा.';
+      alert(msg);
+      setStatus({ type: 'error', text: msg });
+      return;
+    }
+    if (Number(primaryCount) > enrollment.primary || Number(upperCount) > enrollment.upper) {
+      const msg = 'उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.';
+      alert(msg);
+      setStatus({ type: 'error', text: msg });
       return;
     }
 
+    // BORROWED STOCK CHECK
+    const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
+    const foundDeficits: {name: string, deficit: number}[] = [];
+    const deductKg = calculateRequirement();
+
+    newItems.forEach(item => {
+      const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
+      if (currentStock) {
+        const balance = Number(currentStock.current_balance);
+        if (balance < deductKg) {
+          foundDeficits.push({
+            name: item,
+            deficit: Number((deductKg - balance).toFixed(3))
+          });
+        }
+      }
+    });
+
+    if (foundDeficits.length > 0) {
+      setDeficitItems(foundDeficits);
+      setShowBorrowedModal(true);
+      return;
+    }
+
+    performSave();
+  };
+
+  const performSave = async () => {
     setLoading(true);
     setStatus({ type: '', text: '' });
+    setShowBorrowedModal(false);
 
     try {
-      // Process each ingredient in the menu
-      // todayMenu.menu_items is a JSONB array of item names like ["Rice", "Dal"]
-      const itemsToDeduct = todayMenu.menu_items || [];
+      const todayStr = new Date().toISOString().split('T')[0];
 
-      for (const itemName of itemsToDeduct) {
-        const deductionKg = calculateRequirement();
-        const currentStock = inventory.find(i => i.item_name === itemName);
+      const [oldConsumptionRes, existingDailyRes] = await Promise.all([
+        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).maybeSingle(),
+        (supabase as any).from('daily_logs').select('id, is_holiday').eq('teacher_id', userId).eq('log_date', todayStr).maybeSingle()
+      ]);
 
-        if (currentStock) {
-          const newBalance = Math.max(0, Number(currentStock.current_balance) - deductionKg);
+      const oldConsumption = oldConsumptionRes.data;
+      const verifiedDailyId = existingDailyRes.data?.id;
 
-          await (supabase as any)
-            .from('inventory_stock')
-            .update({ current_balance: newBalance })
-            .eq('id', currentStock.id);
+      if (oldConsumption) {
+        const oldItems = Array.from(new Set([
+          ...(oldConsumption.main_foods_all || [oldConsumption.main_food]), 
+          ...(oldConsumption.ingredients_used || [])
+        ])).filter(Boolean);
+
+        for (const item of oldItems as string[]) {
+          const oldPrimary = Number(oldConsumption.meals_served_primary || 0);
+          const oldUpper = Number(oldConsumption.meals_served_upper_primary || 0);
+          const restoreKg = ((oldPrimary * GRAMS_PRIMARY) + (oldUpper * GRAMS_UPPER)) / 1000;
+          
+          if (restoreKg > 0) {
+            const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
+            if (currentStock) {
+              const restoredBalance = Number(currentStock.current_balance) + restoreKg;
+              const { error: rErr } = await (supabase as any).from('inventory_stock').update({ current_balance: restoredBalance }).eq('id', currentStock.id);
+              if (rErr) throw new Error("Stock Restoration Failed: " + rErr.message);
+              currentStock.current_balance = restoredBalance;
+            }
+          }
         }
       }
 
-      // Record the daily log too
-      await (supabase as any).from('daily_logs').insert([{
+      const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
+      for (const item of newItems) {
+        const deductKg = calculateRequirement();
+        if (deductKg > 0) {
+          const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
+          if (currentStock) {
+            const newBalance = Number(currentStock.current_balance) - deductKg;
+            const { error: dErr } = await (supabase as any).from('inventory_stock').update({ current_balance: newBalance }).eq('id', currentStock.id);
+            if (dErr) throw new Error("Stock Deduction Failed: " + dErr.message);
+            currentStock.current_balance = newBalance;
+          }
+        }
+      }
+
+      const dailyPayload = {
         teacher_id: userId,
         meals_served_primary: Number(primaryCount || 0),
         meals_served_upper_primary: Number(upperCount || 0),
-        log_notes: `Auto-deducted ${itemsToDeduct.length} items based on menu.`
-      }]);
+        log_date: todayStr,
+        is_holiday: false 
+      };
 
-      setStatus({ type: 'success', text: 'Consumption processed! Inventory balances have been automatedly updated.' });
-      setPrimaryCount('');
-      setUpperCount('');
+      if (verifiedDailyId) {
+        const { error: uErr } = await (supabase as any).from('daily_logs').update(dailyPayload).eq('id', verifiedDailyId);
+        if (uErr) throw new Error("Attendance Update Failed: " + uErr.message);
+      } else {
+        const { error: iErr } = await (supabase as any).from('daily_logs').insert([dailyPayload]);
+        if (iErr) throw new Error("Attendance Submission Failed: " + iErr.message);
+      }
+
+      const consumptionPayload = {
+        teacher_id: userId,
+        meals_served_primary: Number(primaryCount || 0),
+        meals_served_upper_primary: Number(upperCount || 0),
+        main_food: localMainFoods[0] || '',
+        main_foods_all: localMainFoods,
+        ingredients_used: localIngredients,
+        log_date: todayStr,
+        is_overridden: isOverridden,
+        original_template: scheduledMenu ? JSON.stringify(scheduledMenu) : null
+      };
+
+      if (oldConsumption) {
+        const { error: cErr } = await (supabase as any).from('consumption_logs').update(consumptionPayload).eq('id', oldConsumption.id);
+        if (cErr) throw new Error("Menu Update Failed: " + cErr.message);
+      } else {
+        const { error: cErr } = await (supabase as any).from('consumption_logs').insert([consumptionPayload]);
+        if (cErr) throw new Error("Menu Submission Failed: " + cErr.message);
+      }
+
+      setStatus({ type: 'success', text: isEditing ? 'नोंद अपडेट केली (Log updated)!' : 'नोंद यशस्वीरित्या जतन केली (Log submitted)!' });
+      setIsEditing(true);
       fetchMenuAndStock();
     } catch (err: any) {
-      setStatus({ type: 'error', text: 'Error: ' + err.message });
+      console.error('Save Error:', err);
+      alert("⚠️ ERROR: " + err.message);
+      setStatus({ type: 'error', text: `त्रुटी: ${err.message}` });
     } finally {
       setLoading(false);
     }
@@ -173,12 +311,8 @@ export default function ConsumptionLog() {
   return (
     <Layout>
       <div className="w-[95%] max-w-[1400px] mx-auto mt-1 z-10 relative pb-20">
-
-
-
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
-          {/* Left: Input & Menu Status */}
+          {/* Left Column */}
           <div className="space-y-6">
             <div className="bg-white p-5 border-t-4 border-[#3c8dbc] shadow-lg">
               <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -217,94 +351,85 @@ export default function ConsumptionLog() {
                   {isOverridden && (
                     <button 
                       onClick={handleReset}
-                      className="text-[10px] font-black text-blue-700 hover:text-blue-800 flex items-center gap-1.5 transition-all"
+                      className="bg-amber-400 hover:bg-amber-500 text-amber-950 font-black text-[10px] px-3 py-1.5 rounded-lg shadow-sm border border-amber-500/50 flex items-center gap-1.5 transition-all active:scale-95 whitespace-nowrap"
                     >
-                      <RefreshCcw size={12} /> शेड्यूलनुसार रिसेट करा
+                      <RefreshCcw size={14} className="animate-none group-hover:animate-spin-slow" /> 
+                      शेड्यूलनुसार रिसेट करा
                     </button>
                   )}
                 </div>
                 
                 <div className="space-y-4">
                   <div>
-                    <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">आजचा मुख्य आहार</label>
+                    <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">आजचे मुख्य आहार</label>
+                    <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center mb-3">
+                      {localMainFoods.map((item: string) => (
+                        <span key={item} className="bg-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black text-white uppercase flex items-center gap-2 shadow-md">
+                          {item}
+                          <Trash2 
+                            size={14} 
+                            className="cursor-pointer text-blue-200 hover:text-white" 
+                            onClick={() => handleRemoveMainFood(item)}
+                          />
+                        </span>
+                      ))}
+                    </div>
                     <select 
-                      value={selectedMainFood}
-                      onChange={(e) => setSelectedMainFood(e.target.value)}
-                      className="w-full p-3 text-sm font-black bg-white border-2 border-blue-100 rounded-xl outline-none focus:border-blue-500 shadow-sm text-slate-700 appearance-none cursor-pointer"
+                      onChange={(e) => {handleAddMainFood(e.target.value); e.target.value = "";}}
+                      className="w-full p-2.5 text-[10px] font-black bg-white border-2 border-blue-100 text-blue-900 rounded-xl outline-none"
                     >
-                      <option value="">मुख्य आहार निवडा</option>
+                      <option value="">+ मुख्य आहार जोडा</option>
                       {masterMainFoods.map(food => (
                         <option key={food.item_code} value={food.item_name}>{food.item_name}</option>
                       ))}
-                      {selectedMainFood && !masterMainFoods.find(f => f.item_name === selectedMainFood) && (
-                        <option value={selectedMainFood}>{selectedMainFood}</option>
-                      )}
                     </select>
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">वापरलेले घटक (Ingredients)</label>
+                    <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">वापरलेले घटक</label>
                     <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center">
                       {localIngredients.map((item: string) => (
-                        <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2 shadow-sm animate-in zoom-in-95">
+                        <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2">
                           {item}
                           <Trash2 
                             size={14} 
-                            className="cursor-pointer text-blue-400 hover:text-red-500 transition-all" 
+                            className="cursor-pointer text-blue-400 hover:text-red-500" 
                             onClick={() => handleRemoveIngredient(item)}
                           />
                         </span>
                       ))}
-                      {localIngredients.length === 0 && (
-                        <span className="text-[10px] text-blue-400 font-bold italic w-full text-center">कोणतेही घटक निवडलेले नाहीत</span>
-                      )}
                     </div>
-                  </div>
-
-                  <div className="relative">
                     <select 
-                      onChange={(e) => {
-                        handleAddIngredient(e.target.value);
-                        e.target.value = "";
-                      }}
-                      className="w-full p-2.5 text-[10px] font-black bg-blue-900 text-white rounded-xl outline-none hover:bg-blue-800 transition-colors cursor-pointer appearance-none text-center uppercase tracking-widest shadow-lg shadow-blue-900/10"
+                      onChange={(e) => {handleAddIngredient(e.target.value); e.target.value = "";}}
+                      className="w-full mt-3 p-2.5 text-[10px] font-black bg-blue-900 text-white rounded-xl outline-none"
                     >
-                      <option value="">+ घटक जोडा (Add New Ingredient)</option>
+                      <option value="">+ घटक जोडा</option>
                       {masterIngredients.map(item => (
-                        <option key={item.item_code} value={item.item_name} className="bg-white text-slate-800">{item.item_name}</option>
+                        <option key={item.item_code} value={item.item_name}>{item.item_name}</option>
                       ))}
                     </select>
                   </div>
                 </div>
-
-                {isOverridden && (
-                  <div className="p-3 bg-amber-50 border-l-4 border-amber-400 flex items-center gap-3 rounded-r-lg">
-                    <AlertTriangle size={18} className="text-amber-500 shrink-0" />
-                    <p className="text-[10px] font-bold text-amber-800 leading-tight">
-                      तुम्ही आजच्या आहारामध्ये बदल केला आहे. हा बदल मास्टर शेड्यूलवर परिणाम करणार नाही.
-                    </p>
-                  </div>
-                )}
               </div>
 
               <button
                 onClick={handleProcessConsumption}
-                disabled={loading || !todayMenu}
-                className="w-full mt-6 bg-[#3c8dbc] hover:bg-[#2e7da6] text-white font-black py-3.5 rounded-none shadow-xl shadow-blue-500/20 flex justify-center items-center gap-3 text-xs uppercase tracking-widest transition-all disabled:opacity-50"
+                disabled={loading || localMainFoods.length === 0}
+                className="w-full mt-6 bg-[#3c8dbc] hover:bg-[#2e7da6] text-white font-black py-3.5 flex justify-center items-center gap-3 text-xs uppercase tracking-widest transition-all disabled:opacity-50 shadow-lg shadow-blue-500/20"
               >
-                {loading ? <Loader2 className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
-                Process Consumption & Deduct Stock
+                {loading ? <Loader2 className="animate-spin" size={18} /> : (isEditing ? <RefreshCcw size={18} /> : <CheckCircle2 size={18} />)}
+                {isEditing ? 'नोंद अपडेट करा (Update Log)' : 'दैनिक नोंद जतन करा (Save Daily Log)'}
               </button>
 
               {status.text && (
-                <div className={`mt-4 p-3 text-[11px] font-black uppercase tracking-widest border-2 ${status.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'}`}>
+                <div className={`mt-4 p-3 text-[11px] font-black border-2 ${status.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'}`}>
                   {status.text}
                 </div>
               )}
             </div>
           </div>
 
-          {/* Right: Live Math Preview */}
+          {/* Right Column */}
           <div className="space-y-6">
             <div className="bg-[#474379] p-6 text-white shadow-xl relative overflow-hidden">
               <Utensils className="absolute -right-4 -bottom-4 text-white/5" size={150} />
@@ -313,58 +438,69 @@ export default function ConsumptionLog() {
               </h3>
 
               <div className="space-y-4 relative z-10">
-                {todayMenu?.menu_items?.map((item: string) => {
+                {[...localMainFoods, ...localIngredients].filter(Boolean).map((item: string) => {
                   const req = calculateRequirement();
                   const stock = inventory.find(i => i.item_name === item);
-                  const balanceAfter = stock ? Math.max(0, stock.current_balance - req) : 0;
-                  const isLow = balanceAfter < 5;
+                  const balanceAfter = stock ? stock.current_balance - req : 0;
+                  const isLow = balanceAfter < 5 && balanceAfter >= 0;
+                  const isBorrowed = balanceAfter < 0;
 
                   return (
-                    <div key={item} className="bg-white/10 p-4 border border-white/10 group hover:bg-white/20 transition-all">
+                    <div key={item} className={`p-4 border group transition-all ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/10 border-white/10'}`}>
                       <div className="flex justify-between items-center mb-2">
-                        <span className="text-[12px] font-black uppercase tracking-tight">{item}</span>
-                        <span className="text-[10px] font-bold text-white/60">REQUIREMENT: {req.toFixed(2)} KG</span>
+                        <span className="text-[12px] font-black uppercase">{item}</span>
+                        <span className="text-[10px] font-bold text-white/60">REQ: {req.toFixed(2)} KG</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-1.5 bg-white/10 overflow-hidden">
                           <div
-                            className={`h-full transition-all duration-500 ${isLow ? 'bg-red-400' : 'bg-green-400'}`}
-                            style={{ width: `${Math.min(100, (balanceAfter / (stock?.current_balance || 1)) * 100)}%` }}
+                            className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : (isLow ? 'bg-amber-400' : 'bg-green-400')}`}
+                            style={{ width: `${Math.max(0, Math.min(100, (balanceAfter / (stock?.current_balance || 1)) * 100))}%` }}
                           ></div>
                         </div>
-                        <span className={`text-[10px] font-black ${isLow ? 'text-red-300' : 'text-white/80'}`}>
-                          {balanceAfter.toFixed(2)} KG REMAINING
+                        <span className={`text-[10px] font-black ${isBorrowed ? 'text-red-400' : (isLow ? 'text-amber-300' : 'text-white/80')}`}>
+                          {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(2)} KG BORROWED` : `${balanceAfter.toFixed(2)} KG REMAINING`}
                         </span>
                       </div>
-                      {isLow && (
-                        <div className="mt-2 flex items-center gap-1 text-[9px] font-black text-red-300 uppercase">
-                          <AlertTriangle size={10} /> Low Stock Warning
-                        </div>
-                      )}
                     </div>
                   );
                 })}
-                {!todayMenu && (
-                  <div className="p-10 text-center border-2 border-dashed border-white/20 opacity-40">
-                    <p className="text-xs font-black uppercase tracking-widest">Waiting for active menu...</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-8 pt-6 border-t border-white/10 flex items-center gap-3">
-                <div className="p-2 bg-white/10 rounded">
-                  <TrendingDown className="text-red-300" size={20} />
-                </div>
-                <p className="text-[10px] font-bold text-white/60 leading-relaxed uppercase">
-                  This engine uses standard government-approved consumption rates: <br />
-                  I-V: {GRAMS_PRIMARY}g • VI-VIII: {GRAMS_UPPER}g
-                </p>
               </div>
             </div>
           </div>
-
         </div>
 
+        {/* BORROWED STOCK MODAL */}
+        {showBorrowedModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4">
+            <div className="bg-white max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden border border-amber-200">
+              <div className="bg-amber-50 p-6 border-b border-amber-100 flex items-center gap-4">
+                <div className="bg-amber-100 p-3 rounded-full text-amber-600"><AlertTriangle size={32} /></div>
+                <div>
+                  <h3 className="text-xl font-black text-amber-900">अपुरा साठा (Insufficient Stock)</h3>
+                  <p className="text-amber-700/80 text-sm font-bold mt-1">स्टॉक शिल्लक नसल्यामुळे धान्य उसने घ्यावे लागेल.</p>
+                </div>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <p className="text-slate-600 text-sm font-medium mb-3">पुरेसा साठा उपलब्ध नाही. खालील धान्य उसणे वापरावे लागेल:</p>
+                  <div className="space-y-2">
+                    {deficitItems.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0">
+                        <span className="font-black text-slate-800 text-[13px]">{item.name}</span>
+                        <span className="text-red-600 font-black text-sm">{item.deficit} KG उसने</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="p-6 bg-slate-50 border-t flex gap-3">
+                <button onClick={() => setShowBorrowedModal(false)} className="flex-1 bg-white border-2 py-3 rounded-xl font-black text-xs uppercase">रद्द करा</button>
+                <button onClick={performSave} className="flex-1 bg-amber-500 text-white py-3 rounded-xl font-black text-xs uppercase flex items-center justify-center gap-2"><Utensils size={16} /> उसणे धान्य वापरा</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );
