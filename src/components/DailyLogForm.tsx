@@ -67,8 +67,8 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     setLoading(true);
     setStatus({ type: '', text: '' });
     
-    try {
-      // 1. Concurrent Fetch
+    try 
+    {
       const [masterRes, enrollmentRes, existingLogRes, consumptionLogRes] = await Promise.all([
         (supabase as any).from('menu_master').select('*').eq('teacher_id', userId),
         (supabase as any).from('student_enrollment').select('*').eq('teacher_id', userId).maybeSingle(),
@@ -76,7 +76,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle()
       ]);
 
-      // 2. Map Master Data
+      
       const mapping: Record<string, string> = {};
       const gramsMap: Record<string, {primary: number, upper: number}> = {};
       if (masterRes.data) {
@@ -203,7 +203,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         return;
       }
 
-      // BORROWED STOCK CHECK
+      
       const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
       const foundDeficits: {name: string, deficit: number}[] = [];
       
@@ -241,7 +241,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
       const oldConsumption = oldConsumptionRes.data;
       const verifiedDailyId = existingDailyRes.data?.id;
 
-      // Restore old stock
+
       if (oldConsumption) {
         const oldItems = Array.from(new Set([...(oldConsumption.main_foods_all || [oldConsumption.main_food]), ...(oldConsumption.ingredients_used || [])])).filter(Boolean);
         for (const item of oldItems as string[]) {
@@ -258,7 +258,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         }
       }
 
-      // Deduct new stock (Allowing Negative/Borrowed)
+
       if (!isHoliday) {
         const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
         for (const item of newItems) {
@@ -339,14 +339,22 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   };
 
   return (
-    <div className="bg-white max-w-4xl w-full max-h-[90vh] overflow-y-auto rounded shadow-2xl relative">
-      <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-800 transition-colors z-10 bg-white rounded-full p-1">
-        <X size={24} />
-      </button>
-
-      <div className="p-8 pb-0 border-b pb-6">
-        <h1 className="text-3xl font-black text-slate-800 tracking-tighter uppercase italic">Daily Log: <span className="text-[#3c8dbc]">{targetDate}</span></h1>
-        <p className="text-slate-400 font-bold tracking-widest text-[10px] uppercase mt-1">Automated Stock Deduction Engine</p>
+    <div className="bg-white max-w-4xl w-full h-[95vh] md:h-auto md:max-h-[90vh] overflow-hidden rounded-t-3xl md:rounded-3xl shadow-2xl border border-slate-200 flex flex-col relative">
+      {/* High-Tech Header */}
+      <div className="bg-[#474379] p-5 md:p-10 text-white flex justify-between items-center relative overflow-hidden flex-shrink-0">
+        <ArrowRight className="absolute -right-4 -bottom-4 text-white/10" size={120} />
+        <div className="relative z-10">
+          <h1 className="text-xl md:text-3xl font-black text-white tracking-tighter uppercase italic flex items-center gap-3">
+             <Utensils className="text-blue-400" size={32} /> Daily Log Entry
+          </h1>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="bg-white/20 px-3 py-0.5 rounded-full text-[10px] md:text-xs font-black uppercase tracking-widest">{targetDate}</span>
+            <p className="text-white/40 font-bold tracking-widest text-[9px] uppercase">Consumption Engine</p>
+          </div>
+        </div>
+        <button onClick={onClose} className="bg-white/10 hover:bg-white/20 p-2 md:p-4 rounded-2xl transition-all active:scale-90 relative z-10">
+          <X size={24} />
+        </button>
       </div>
 
       <div className="mx-8 mt-4 p-4 bg-indigo-50 border-2 border-indigo-100 rounded-2xl flex flex-col md:flex-row gap-4 items-center">

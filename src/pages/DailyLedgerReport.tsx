@@ -383,49 +383,64 @@ export default function DailyLedgerReport() {
     <Layout>
       <div className="mx-auto mt-4 pb-20 print:p-0 print:m-0 print:max-w-full print:bg-white overflow-hidden w-full max-w-[100vw] lg:max-w-[95vw]">
         
-        {/* Top Control Bar */}
-        <div className="mb-6 p-5 bg-white rounded-xl shadow-xl border border-slate-200 print:hidden flex flex-col md:flex-row gap-5 justify-between items-center mx-auto">
-          
-          <div className="flex items-center gap-4">
-            <select 
-              value={selectedMonth} 
-              onChange={e => setSelectedMonth(Number(e.target.value))} 
-              className="border-2 border-slate-200 rounded-lg px-4 py-2.5 font-bold text-sm bg-slate-50 focus:border-[#474379] outline-none"
-            >
-              {marathiMonths.map((m, i) => <option key={i+1} value={i+1}>{m}</option>)}
-            </select>
-            <select 
-              value={selectedYear} 
-              onChange={e => setSelectedYear(Number(e.target.value))} 
-              className="border-2 border-slate-200 rounded-lg px-4 py-2.5 font-bold text-sm bg-slate-50 focus:border-[#474379] outline-none"
-            >
-              {years.map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-          </div>
+        {/* High-Tech Mobile Filter Bar */}
+        <div className="mb-6 mx-auto w-full lg:max-w-4xl print:hidden">
+          <div className="bg-white/80 backdrop-blur-xl p-5 md:p-8 rounded-3xl md:rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.05)] border border-white flex flex-col md:flex-row gap-6 items-center justify-between">
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <div className="bg-blue-600 p-3 rounded-2xl text-white shadow-lg shadow-blue-200">
+                <Calculator size={24} />
+              </div>
+              <div>
+                <h2 className="text-lg font-black text-slate-800 uppercase tracking-tighter leading-none italic">Daily Ledger</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Official Snapshot Engine</p>
+              </div>
+            </div>
 
-          <div className="flex gap-4">
-            <button 
-              onClick={() => fetchLedgerData(userId!, selectedMonth, selectedYear, true)}
-              disabled={loading || isSyncing}
-              className="bg-indigo-50 text-indigo-700 font-bold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-100 transition-all text-xs disabled:opacity-50"
-            >
-              {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              Sync Live Data
-            </button>
+            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-center">
+              <div className="flex bg-slate-100/50 p-1.5 rounded-2xl border border-slate-100 w-full min-[400px]:w-auto">
+                <select 
+                  value={selectedMonth} 
+                  onChange={e => setSelectedMonth(Number(e.target.value))} 
+                  className="bg-transparent px-4 py-2 font-black text-xs md:text-sm text-slate-700 outline-none min-w-[100px]"
+                >
+                  {marathiMonths.map((m, i) => <option key={i+1} value={i+1}>{m}</option>)}
+                </select>
+                <div className="w-[1.5px] h-6 bg-slate-200 my-auto" />
+                <select 
+                  value={selectedYear} 
+                  onChange={e => setSelectedYear(Number(e.target.value))} 
+                  className="bg-transparent px-4 py-2 font-black text-xs md:text-sm text-slate-700 outline-none min-w-[80px]"
+                >
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
 
-            {!isSaved ? (
-              <button 
-                onClick={handleSave} 
-                disabled={loading || !ledgerData} 
-                className="bg-[#3c8dbc] text-white px-6 py-2 rounded-lg font-black uppercase text-xs flex items-center gap-2 transition-all shadow-lg active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />} खतावणी सेव्ह करा
-              </button>
-            ) : (
-              <button onClick={() => window.print()} className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2 rounded-lg font-black uppercase text-xs flex items-center gap-2 transition-all shadow-lg active:scale-95">
-                <Printer size={18} /> Print Ledger
-              </button>
-            )}
+              <div className="flex gap-2 w-full min-[400px]:w-auto">
+                <button 
+                  onClick={() => fetchLedgerData(userId!, selectedMonth, selectedYear, true)}
+                  disabled={loading || isSyncing}
+                  className="flex-1 bg-white border border-slate-200 text-slate-600 p-3 rounded-2xl hover:bg-slate-50 transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+                  title="Sync Live Data"
+                >
+                  {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                  <span className="md:hidden lg:inline text-[10px] font-black uppercase">Sync</span>
+                </button>
+
+                {!isSaved ? (
+                  <button 
+                    onClick={handleSave} 
+                    disabled={loading || !ledgerData} 
+                    className="flex-[2] bg-blue-600 text-white px-6 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200 active:scale-95 disabled:opacity-50"
+                  >
+                    {loading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />} Save Record
+                  </button>
+                ) : (
+                  <button onClick={() => window.print()} className="flex-[2] bg-slate-900 text-white px-6 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95">
+                    <Printer size={18} /> Print Record
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -447,7 +462,7 @@ export default function DailyLedgerReport() {
           </div>
         )}
 
-        {/* Printable Area */}
+
         <div className="bg-white print:p-0 print:m-0 w-full font-['Inter']">
           <style dangerouslySetInnerHTML={{__html: `
             @media print {
@@ -456,7 +471,7 @@ export default function DailyLedgerReport() {
               ::-webkit-scrollbar { display: none; }
             }
           `}} />
-
+          
           {loading ? (
              <div className="h-[50vh] flex flex-col justify-center items-center print:hidden space-y-4">
                  <Loader2 size={40} className="animate-spin text-[#474379]" />
