@@ -8,7 +8,9 @@ import {
   Utensils,
   ArrowRight,
   TrendingDown,
-  Loader2
+  Loader2,
+  RefreshCcw,
+  X
 } from 'lucide-react';
 
 export default function ConsumptionLog() {
@@ -40,25 +42,46 @@ export default function ConsumptionLog() {
     setLoading(true);
     try {
       const now = new Date();
-      const dayOfWeek = now.getDay();
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const stringDay = dayNames[dayOfWeek];
-      const startDate = new Date(now.getFullYear(), 0, 1);
-      const days = Math.floor((now.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
-      const weekNumber = Math.ceil(days / 7);
-      const scheduleType = weekNumber % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
+      const dayOfWeek = now.getDay(); // 0 (Sun) to 6 (Sat)
+      
+      // 1. Fetch Master Items for Dropdowns and Chip Labels
+      const { data: menuData } = await (supabase as any)
+        .from('menu_master')
+        .select('item_code, item_name, item_category')
+        .eq('teacher_id', userId);
 
-      // 2. Fetch Menu
-      const { data: menu } = await (supabase as any)
-        .from('menu_weekly_schedule')
+      if (menuData) {
+        setMasterMainFoods(menuData.filter((i: any) => i.item_category === 'MAIN'));
+        setMasterIngredients(menuData.filter((i: any) => i.item_category === 'INGREDIENT'));
+      }
+
+      // 2. Fetch Scheduled Menu for Today
+      // The prompt specified 'weekly_schedule' and 'day_of_week'
+      const { data: schedule } = await (supabase as any)
+        .from('weekly_schedule')
         .select('*')
         .eq('teacher_id', userId)
-        .eq('week_pattern', scheduleType)
-        .eq('day_name', stringDay)
-        .eq('is_active', true)
+        .eq('day_of_week', dayOfWeek)
         .single();
 
-      setTodayMenu(menu);
+      if (schedule) {
+        // Resolve IDs to names for the UI chips
+        const scheduledIngredients = (schedule.ingredients || []).map((code: string) => {
+          const item = menuData?.find(m => m.item_code === code);
+          return item ? item.item_name : code;
+        });
+
+        const initialSchedule = {
+          mainFood: schedule.main_food || '',
+          ingredients: scheduledIngredients
+        };
+
+        setScheduledMenu(initialSchedule);
+        
+        // Clone to Instance (Override Layer)
+        setSelectedMainFood(initialSchedule.mainFood);
+        setActiveIngredients(initialSchedule.ingredients);
+      }
 
       // 3. Fetch Stock
       const { data: stock } = await (supabase as any)
@@ -74,10 +97,24 @@ export default function ConsumptionLog() {
     }
   };
 
+  const handleRemoveIngredient = (name: string) => {
+    setActiveIngredients(prev => prev.filter(i => i !== name));
+  };
+
+  const handleReset = () => {
+    if (scheduledMenu) {
+      setSelectedMainFood(scheduledMenu.mainFood);
+      setActiveIngredients(scheduledMenu.ingredients);
+    }
+  };
+
+  const isOverridden = scheduledMenu && (
+    selectedMainFood !== scheduledMenu.mainFood ||
+    JSON.stringify([...activeIngredients].sort()) !== JSON.stringify([...scheduledMenu.ingredients].sort())
+  );
+
   const calculateRequirement = () => {
     if (!primaryCount && !upperCount) return 0;
-    // This is a simplified logic where we assume every ingredient in the menu
-    // follows the standard meal distribution. 
     const totalGrams = (Number(primaryCount || 0) * GRAMS_PRIMARY) + (Number(upperCount || 0) * GRAMS_UPPER);
     return totalGrams / 1000; // KG
   };
@@ -169,18 +206,84 @@ export default function ConsumptionLog() {
                 </div>
               </div>
 
-              <div className="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-none">
-                <h4 className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2">Today's Active Menu</h4>
-                {todayMenu ? (
-                  <div className="flex flex-wrap gap-2">
-                    {todayMenu.menu_items?.map((item: string) => (
-                      <span key={item} className="bg-white px-2 py-1 border border-blue-200 text-[11px] font-bold text-blue-700 uppercase">
-                        {item}
-                      </span>
-                    ))}
+              <div className="mt-8 p-6 bg-blue-50/50 border-2 border-blue-200/50 rounded-2xl backdrop-blur-md shadow-inner space-y-6">
+                <div className="flex justify-between items-center border-b border-blue-100 pb-3">
+                  <div>
+                    <h4 className="text-[11px] font-black text-blue-900 uppercase tracking-widest flex items-center gap-2">
+                      <Utensils size={14} className="text-blue-600" /> आजचा आहार (Smart Override)
+                    </h4>
+                    <p className="text-[9px] font-bold text-blue-600/70 mt-0.5 italic">नोंद: हा बदल फक्त आजच्या नोंदीसाठी आहे.</p>
                   </div>
-                ) : (
-                  <p className="text-xs font-bold text-red-500 italic">No schedule found for today!</p>
+                  {isOverridden && (
+                    <button 
+                      onClick={handleReset}
+                      className="text-[10px] font-black text-blue-700 hover:text-blue-800 flex items-center gap-1.5 transition-all"
+                    >
+                      <RefreshCcw size={12} /> शेड्यूलनुसार रिसेट करा
+                    </button>
+                  )}
+                </div>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">आजचा मुख्य आहार</label>
+                    <select 
+                      value={selectedMainFood}
+                      onChange={(e) => setSelectedMainFood(e.target.value)}
+                      className="w-full p-3 text-sm font-black bg-white border-2 border-blue-100 rounded-xl outline-none focus:border-blue-500 shadow-sm text-slate-700 appearance-none cursor-pointer"
+                    >
+                      <option value="">मुख्य आहार निवडा</option>
+                      {masterMainFoods.map(food => (
+                        <option key={food.item_code} value={food.item_name}>{food.item_name}</option>
+                      ))}
+                      {selectedMainFood && !masterMainFoods.find(f => f.item_name === selectedMainFood) && (
+                        <option value={selectedMainFood}>{selectedMainFood}</option>
+                      )}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">वापरलेले घटक (Ingredients)</label>
+                    <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center">
+                      {localIngredients.map((item: string) => (
+                        <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2 shadow-sm animate-in zoom-in-95">
+                          {item}
+                          <Trash2 
+                            size={14} 
+                            className="cursor-pointer text-blue-400 hover:text-red-500 transition-all" 
+                            onClick={() => handleRemoveIngredient(item)}
+                          />
+                        </span>
+                      ))}
+                      {localIngredients.length === 0 && (
+                        <span className="text-[10px] text-blue-400 font-bold italic w-full text-center">कोणतेही घटक निवडलेले नाहीत</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="relative">
+                    <select 
+                      onChange={(e) => {
+                        handleAddIngredient(e.target.value);
+                        e.target.value = "";
+                      }}
+                      className="w-full p-2.5 text-[10px] font-black bg-blue-900 text-white rounded-xl outline-none hover:bg-blue-800 transition-colors cursor-pointer appearance-none text-center uppercase tracking-widest shadow-lg shadow-blue-900/10"
+                    >
+                      <option value="">+ घटक जोडा (Add New Ingredient)</option>
+                      {masterIngredients.map(item => (
+                        <option key={item.item_code} value={item.item_name} className="bg-white text-slate-800">{item.item_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {isOverridden && (
+                  <div className="p-3 bg-amber-50 border-l-4 border-amber-400 flex items-center gap-3 rounded-r-lg">
+                    <AlertTriangle size={18} className="text-amber-500 shrink-0" />
+                    <p className="text-[10px] font-bold text-amber-800 leading-tight">
+                      तुम्ही आजच्या आहारामध्ये बदल केला आहे. हा बदल मास्टर शेड्यूलवर परिणाम करणार नाही.
+                    </p>
+                  </div>
                 )}
               </div>
 

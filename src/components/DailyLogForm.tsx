@@ -23,7 +23,6 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   const [loading, setLoading] = useState(false);
   const [primaryCount, setPrimaryCount] = useState<string>('');
   const [upperCount, setUpperCount] = useState<string>('');
-  const [todayMenu, setTodayMenu] = useState<any>(null);
   const [inventory, setInventory] = useState<any[]>([]);
   const [foodNameMap, setFoodNameMap] = useState<Record<string, string>>({});
   const [liveStockMap, setLiveStockMap] = useState<Record<string, number>>({});
@@ -132,6 +131,38 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     }
   };
 
+  const handleRemoveMainFood = (name: string) => {
+    setLocalMainFoods(prev => prev.filter(i => i !== name));
+  };
+
+  const handleAddMainFood = (name: string) => {
+    if (name && !localMainFoods.includes(name)) {
+      setLocalMainFoods(prev => [...prev, name]);
+    }
+  };
+
+  const handleRemoveIngredient = (name: string) => {
+    setLocalIngredients(prev => prev.filter(i => i !== name));
+  };
+
+  const handleAddIngredient = (name: string) => {
+    if (name && !localIngredients.includes(name)) {
+      setLocalIngredients(prev => [...prev, name]);
+    }
+  };
+
+  const handleReset = () => {
+    if (scheduledMenu) {
+      setLocalMainFoods(scheduledMenu.mainFoods);
+      setLocalIngredients(scheduledMenu.ingredients);
+    }
+  };
+
+  const isOverridden = scheduledMenu && (
+    JSON.stringify([...localMainFoods].sort()) !== JSON.stringify([...scheduledMenu.mainFoods].sort()) ||
+    JSON.stringify([...localIngredients].sort()) !== JSON.stringify([...scheduledMenu.ingredients].sort())
+  );
+  
   const getRequiredKg = (itemIdentifier: string) => {
     if (!primaryCount && !upperCount) return 0;
     const grams = foodGramsMap[itemIdentifier] || { primary: GRAMS_PRIMARY, upper: GRAMS_UPPER };
@@ -226,7 +257,6 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         meals_served_upper_primary: Number(upperCount || 0)
       };
 
-      let dbError;
       if (isEditing && existingLogId) {
         const { error } = await (supabase as any)
           .from('daily_logs')
