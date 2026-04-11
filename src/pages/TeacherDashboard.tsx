@@ -156,7 +156,7 @@ export default function TeacherDashboard() {
         .single();
 
       if (error && error.code !== 'PGRST116') throw error;
-      setTodayMenu(data);
+      setTodayMenu(data as ScheduleRowDB);
     } catch (err: any) {
       console.error('Error fetching menu:', err.message);
     }
@@ -471,6 +471,22 @@ export default function TeacherDashboard() {
             )}
 
           </div>
+
+        </div>
+
+        {/* Floating Action Button (FAB) for Mobile Quick Submission */}
+        <div className="fixed bottom-20 right-6 md:hidden z-[40]">
+           <button 
+             onClick={() => {
+               const now = new Date();
+               const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+               setSelectedLogDate(dateStr);
+               setIsLogModalOpen(true);
+             }}
+             className="w-16 h-16 bg-gradient-to-br from-[#474379] to-[#2d2a4d] text-white rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.3)] border-2 border-white/20 flex items-center justify-center active:scale-95 transition-all"
+           >
+             <Utensils size={28} />
+           </button>
         </div>
 
       </div>

@@ -411,9 +411,6 @@ export default function AdminDashboard() {
                         className="w-full border border-slate-300 p-2.5 text-sm font-medium focus:outline-none focus:border-[#3c8dbc] focus:ring-1 focus:ring-[#3c8dbc] transition-shadow text-[#2d3748]" 
                         placeholder="e.g. Patil"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Official Email</label>
                       <input 
                         type="email" 
                         value={newTeacher.email}
@@ -435,9 +432,6 @@ export default function AdminDashboard() {
                         className="w-full border border-slate-300 p-2.5 text-sm font-medium focus:outline-none focus:border-[#3c8dbc] focus:ring-1 focus:ring-[#3c8dbc] transition-shadow text-[#2d3748]" 
                         placeholder="e.g. ZP Primary School"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">School ID (UDISE)</label>
                       <input 
                         type="text" 
                         value={newTeacher.schoolId}

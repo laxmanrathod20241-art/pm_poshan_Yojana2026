@@ -76,9 +76,10 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle()
       ]);
 
-      
+
       const mapping: Record<string, string> = {};
       const gramsMap: Record<string, {primary: number, upper: number}> = {};
+      
       if (masterRes.data) {
         setMasterMainFoods(masterRes.data.filter((i: any) => i.item_category === 'MAIN'));
         setMasterIngredients(masterRes.data.filter((i: any) => i.item_category === 'INGREDIENT'));
@@ -99,14 +100,17 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         });
       }
 
-      const targetDateObj = new Date(targetDate);
+      // FIX 1: Timezone Safe Date Parsing & Week of the Month Logic
+      const [year, month, day] = targetDate.split('-');
+      const targetDateObj = new Date(Number(year), Number(month) - 1, Number(day));
+      
       const dayOfWeek = targetDateObj.getDay();
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const stringDay = dayNames[dayOfWeek];
       
-      const startDate = new Date(targetDateObj.getFullYear(), 0, 1);
-      const daysDiff = Math.floor((targetDateObj.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
-      const weekNum = Math.ceil(daysDiff / 7);
+      // Calculate Week 1, 2, 3, 4 of the CURRENT MONTH, not the year.
+      const dateOfMonth = targetDateObj.getDate();
+      const weekNum = Math.ceil(dateOfMonth / 7);
       const scheduleType = weekNum % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
       
       const { data: menu } = await (supabase as any)
@@ -198,12 +202,16 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         alert('कृपया विद्यार्थ्यांची उपस्थिती प्रविष्ट करा.');
         return;
       }
-      if (Number(primaryCount) > enrollment.primary || Number(upperCount) > enrollment.upper) {
-        alert('उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.');
+      // FIX 2: Prevent locking out teachers if enrollment data hasn't been added yet
+      if (enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) {
+        alert('प्राथमिक उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.');
+        return;
+      }
+      if (enrollment.upper > 0 && Number(upperCount) > enrollment.upper) {
+        alert('उच्च प्राथमिक उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.');
         return;
       }
 
-      
       const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
       const foundDeficits: {name: string, deficit: number}[] = [];
       
@@ -241,7 +249,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
       const oldConsumption = oldConsumptionRes.data;
       const verifiedDailyId = existingDailyRes.data?.id;
 
-
+      
       if (oldConsumption) {
         const oldItems = Array.from(new Set([...(oldConsumption.main_foods_all || [oldConsumption.main_food]), ...(oldConsumption.ingredients_used || [])])).filter(Boolean);
         for (const item of oldItems as string[]) {
@@ -258,7 +266,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         }
       }
 
-
+      
       if (!isHoliday) {
         const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
         for (const item of newItems) {
@@ -285,6 +293,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         await (supabase as any).from('daily_logs').insert([dailyPayload]);
       }
 
+      // Safe Audit Payload without holiday flags to avoid Postgres schema mismatch errors
       const auditPayload = {
         teacher_id: userId, log_date: targetDate, is_holiday: isHoliday, holiday_remarks: holidayRemarks,
         meals_served_primary: Number(primaryCount || 0), meals_served_upper_primary: Number(upperCount || 0),
@@ -352,137 +361,152 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
             <p className="text-white/40 font-bold tracking-widest text-[9px] uppercase">Consumption Engine</p>
           </div>
         </div>
-        <button onClick={onClose} className="bg-white/10 hover:bg-white/20 p-2 md:p-4 rounded-2xl transition-all active:scale-90 relative z-10">
-          <X size={24} />
-        </button>
+            <button onClick={onClose} className="bg-white/10 hover:bg-white/20 p-2 md:p-4 rounded-2xl transition-all active:scale-90 relative z-10">
+             <X size={24} />
+             </button>
       </div>
 
-      <div className="mx-8 mt-4 p-4 bg-indigo-50 border-2 border-indigo-100 rounded-2xl flex flex-col md:flex-row gap-4 items-center">
-        <label className="flex items-center gap-3 cursor-pointer group">
-          <div className="relative">
-            <input type="checkbox" className="sr-only peer" checked={isHoliday} onChange={e => { setIsHoliday(e.target.checked); if (e.target.checked) { setPrimaryCount('0'); setUpperCount('0'); setLocalMainFoods([]); setLocalIngredients([]); } }} />
-            <div className="w-12 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+      <div className="flex-1 overflow-y-auto no-scrollbar">
+        {/* Toggle Section */}
+        <div className="px-5 md:px-10 py-6 bg-indigo-50/50 border-b border-indigo-100 flex flex-col md:flex-row gap-4 items-center">
+          <div className="flex items-center gap-4 w-full md:w-auto">
+             <div className="p-3 bg-indigo-100 text-indigo-700 rounded-2xl">
+                <AlertTriangle size={20} />
+             </div>
+             <label className="flex items-center gap-4 cursor-pointer group flex-1">
+               <div className="relative">
+                 <input type="checkbox" className="sr-only peer" checked={isHoliday} onChange={e => { setIsHoliday(e.target.checked); if (e.target.checked) { setPrimaryCount('0'); setUpperCount('0'); setLocalMainFoods([]); setLocalIngredients([]); } }} />
+                 <div className="w-14 h-8 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-blue-600"></div>
+               </div>
+               <span className="text-[11px] md:text-sm font-black text-indigo-900 uppercase tracking-widest italic group-hover:text-blue-600 transition-colors">
+                 {isHoliday ? 'शाळा सुट्टी आहे (Holiday Active)' : 'शाळा सुरू आहे (School Open)'}
+               </span>
+             </label>
           </div>
-          <span className="text-xs font-black text-indigo-900 uppercase tracking-widest">
-            {isHoliday ? 'शाळा सुट्टी आहे (Holiday Active)' : 'शाळा सुरू आहे (School Open)'}
-          </span>
-        </label>
-        {isHoliday && <input type="text" value={holidayRemarks} onChange={e => setHolidayRemarks(e.target.value)} placeholder="कारण (Name of Holiday)" className="flex-1 p-2.5 text-[11px] font-bold border-2 border-indigo-200 bg-white rounded-xl outline-none" />}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2">
-        <div className="p-8 border-r border-slate-100">
-          {!isHoliday && (
-            <>
-              <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-6 flex items-center gap-2">
-                <Calculator size={18} className="text-[#3c8dbc]" /> Attendance Input
-              </h3>
-              <div className="space-y-6">
-                <div>
-                   <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Primary Students (I - V) [Max: {enrollment.primary}]</label>
-                  <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full border-2 p-3 bg-slate-50 font-black ${Number(primaryCount) > enrollment.primary ? 'border-red-500 bg-red-50' : 'border-slate-100 focus:border-blue-500'}`} placeholder="0" />
-                </div>
-                <div>
-                   <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Upper Primary (VI - VIII) [Max: {enrollment.upper}]</label>
-                  <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full border-2 p-3 bg-slate-50 font-black ${Number(upperCount) > enrollment.upper ? 'border-red-500 bg-red-50' : 'border-slate-100 focus:border-blue-500'}`} placeholder="0" />
-                </div>
-              </div>
-
-              <div className="mt-8 p-6 bg-blue-50/50 border-2 border-blue-200/50 rounded-2xl space-y-6">
-                <div className="flex justify-between items-center border-b border-blue-100 pb-3">
-                  <h4 className="text-[11px] font-black text-blue-900 uppercase tracking-widest flex items-center gap-2"><Utensils size={14} className="text-blue-600" /> आजचा आहार (Smart Override)</h4>
-                  {isOverridden && (
-                    <button onClick={handleReset} className="bg-amber-400 hover:bg-amber-500 text-amber-950 font-black text-[10px] px-3 py-1.5 rounded-lg shadow-sm border border-amber-500/50 flex items-center gap-1.5 transition-all">
-                      <RefreshCcw size={14} className="animate-none group-hover:animate-spin-slow" /> शेड्यूलनुसार रिसेट करा
-                    </button>
-                  )}
-                </div>
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">मुख्य आहार (Main Dishes)</label>
-                    <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center mb-3">
-                      {localMainFoods.map(item => (
-                        <span key={item} className="bg-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black text-white uppercase flex items-center gap-2 shadow-md">
-                          {item} <Trash2 size={14} className="cursor-pointer" onClick={() => handleRemoveMainFood(item)} />
-                        </span>
-                      ))}
-                    </div>
-                    <select onChange={e => { handleAddMainFood(e.target.value); e.target.value = ""; }} className="w-full p-2.5 text-[10px] font-black bg-white border-2 border-blue-100 rounded-xl outline-none">
-                      <option value="">+ मुख्य आहार जोडा</option>
-                      {masterMainFoods.map(f => <option key={f.item_code} value={f.item_name}>{f.item_name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">घटक (Ingredients)</label>
-                    <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center">
-                      {localIngredients.map(item => (
-                        <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2">
-                          {item} <Trash2 size={14} className="cursor-pointer text-blue-400" onClick={() => handleRemoveIngredient(item)} />
-                        </span>
-                      ))}
-                    </div>
-                    <select onChange={e => { handleAddIngredient(e.target.value); e.target.value = ""; }} className="w-full mt-3 p-2.5 text-[10px] font-black bg-blue-900 text-white rounded-xl outline-none">
-                      <option value="">+ घटक जोडा</option>
-                      {masterIngredients.map(i => <option key={i.item_code} value={i.item_name}>{i.item_name}</option>)}
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-
-          <div className="flex flex-col gap-2 mt-6">
-            <button onClick={handleProcessConsumption} disabled={loading || (!isHoliday && localMainFoods.length === 0)} className="w-full bg-[#3c8dbc] hover:bg-[#2e7da6] text-white font-black py-4 flex justify-center items-center gap-3 text-xs uppercase tracking-widest transition-all shadow-xl disabled:bg-slate-400">
-              {loading ? <Loader2 className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
-              {isHoliday ? 'Holiday Submit' : (isEditing ? 'Attendance Update' : 'Log Submit')}
-            </button>
-            {isEditing && (
-              <button onClick={handleDeleteLog} className="w-full bg-red-50 hover:bg-red-500 text-red-600 hover:text-white border border-red-200 font-bold py-3 text-[10px] uppercase transition-all flex justify-center items-center gap-2">
-                <Trash2 size={14} /> Delete & Restore Stock
-              </button>
-            )}
-          </div>
-          {status.text && <div className={`mt-4 p-3 text-[11px] font-black border ${status.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'}`}>{status.text}</div>}
+          {isHoliday && <input type="text" value={holidayRemarks} onChange={e => setHolidayRemarks(e.target.value)} placeholder="कारण (Name of Holiday)" className="w-full md:flex-1 p-4 text-sm font-black border-2 border-indigo-200 bg-white rounded-2xl outline-none shadow-inner" />}
         </div>
 
-        {!isHoliday && (
-          <div className="p-8 bg-[#474379] text-white overflow-hidden relative">
-             <Utensils className="absolute -right-4 -bottom-4 text-white/5" size={120} />
-             <h3 className="text-sm font-black uppercase tracking-widest mb-6 flex items-center gap-2"><ArrowRight size={18} /> Projected Stock Impact</h3>
-             <div className="space-y-4 relative z-10">
-                {[...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
-                  const req = calculateRequirement(item);
-                  const avl = liveStockMap[item] || (foodNameMap[item] ? liveStockMap[foodNameMap[item]] : 0) || 0;
-                  const balanceAfter = avl - req;
-                  const isBorrowed = balanceAfter < 0;
-                  const pct = avl > 0 ? Math.max(0, Math.min(100, (balanceAfter / avl) * 100)) : 0;
+        <div className="grid grid-cols-1 lg:grid-cols-2">
+          {/* Form Side */}
+          <div className="p-5 md:p-10 lg:border-r border-slate-100 space-y-8">
+            {!isHoliday && (
+              <>
+                <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                  <Calculator size={18} className="text-[#3c8dbc]" /> Attendance Input
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all">
+                     <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Primary (I-V)</label>
+                    <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${Number(primaryCount) > enrollment.primary ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                  </div>
+                  <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all">
+                     <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Upper (VI-VIII)</label>
+                    <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${Number(upperCount) > enrollment.upper ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                  </div>
+                </div>
 
-                  return (
-                    <div key={item} className={`p-4 border group transition-all ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/10 border-white/10'}`}>
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-[12px] font-black uppercase">{item}</span>
-                        <span className="text-[10px] font-bold text-white/60">REQ: {req.toFixed(2)} KG</span>
+                <div className="p-6 bg-blue-50/50 border-2 border-blue-200/50 rounded-2xl space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-blue-100 pb-3 gap-2">
+                    <h4 className="text-[11px] font-black text-blue-900 uppercase tracking-widest flex items-center gap-2"><Utensils size={14} className="text-blue-600" /> आजचा आहार (Smart Override)</h4>
+                    {isOverridden && (
+                      <button onClick={handleReset} className="bg-amber-400 hover:bg-amber-500 text-amber-950 font-black text-[10px] px-3 py-1.5 rounded-lg shadow-sm border border-amber-500/50 flex items-center gap-1.5 transition-all">
+                        <RefreshCcw size={14} /> रिसेट करा
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">मुख्य आहार (Main Dishes)</label>
+                      <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center mb-3">
+                        {localMainFoods.map(item => (
+                          <span key={item} className="bg-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black text-white uppercase flex items-center gap-2 shadow-md">
+                            {item} <Trash2 size={14} className="cursor-pointer" onClick={() => handleRemoveMainFood(item)} />
+                          </span>
+                        ))}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 h-1.5 bg-white/10 overflow-hidden">
-                           <div className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : 'bg-green-400'}`} style={{ width: `${pct}%` }} />
-                        </div>
-                        <span className={`text-[10px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/80'}`}>
-                          {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(2)} KG उसने` : `${balanceAfter.toFixed(2)} KG REM`}
-                        </span>
-                      </div>
+                      <select onChange={e => { handleAddMainFood(e.target.value); e.target.value = ""; }} className="w-full p-3 text-[11px] font-black bg-white border-2 border-blue-100 rounded-xl outline-none focus:border-blue-500">
+                        <option value="">+ मुख्य आहार जोडा</option>
+                        {masterMainFoods.map(f => <option key={f.item_code} value={f.item_name}>{f.item_name}</option>)}
+                      </select>
                     </div>
-                  );
-                })}
-             </div>
+                    <div>
+                      <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">घटक (Ingredients)</label>
+                      <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center">
+                        {localIngredients.map(item => (
+                          <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2">
+                            {item} <Trash2 size={14} className="cursor-pointer text-blue-400" onClick={() => handleRemoveIngredient(item)} />
+                          </span>
+                        ))}
+                      </div>
+                      <select onChange={e => { handleAddIngredient(e.target.value); e.target.value = ""; }} className="w-full mt-3 p-3 text-[11px] font-black bg-blue-900 text-white rounded-xl outline-none">
+                        <option value="">+ घटक जोडा</option>
+                        {masterIngredients.map(i => <option key={i.item_code} value={i.item_name}>{i.item_name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div className="sticky lg:relative bottom-0 bg-white/95 backdrop-blur-xl border-t lg:border-none p-5 lg:p-0 flex flex-col gap-3 z-30">
+              <button 
+                onClick={handleProcessConsumption} 
+                disabled={loading || (!isHoliday && localMainFoods.length === 0)} 
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-black py-5 rounded-3xl flex justify-center items-center gap-4 text-xs md:text-sm uppercase tracking-[0.2em] transition-all shadow-xl disabled:bg-slate-300"
+              >
+                {loading ? <Loader2 className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
+                {isHoliday ? 'Submit Holiday' : (isEditing ? 'Update Entry' : 'Post Consumption')}
+              </button>
+              {isEditing && (
+                <button onClick={handleDeleteLog} className="w-full bg-red-50 hover:bg-red-500 text-red-600 hover:text-white border-2 border-red-100 font-extrabold py-3 rounded-2xl text-[10px] uppercase tracking-widest transition-all flex justify-center items-center gap-2 active:scale-95">
+                  <Trash2 size={16} /> Delete & Reset Stock
+                </button>
+              )}
+              {status.text && <div className={`p-4 rounded-2xl text-[10px] md:text-xs font-black border-2 text-center animate-in slide-in-from-bottom-5 ${status.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'}`}>{status.text}</div>}
+            </div>
           </div>
-        )}
+
+          {/* Impact/Visual Side */}
+          {!isHoliday && (
+            <div className="p-5 md:p-10 bg-[#474379] text-white overflow-hidden relative">
+               <Utensils className="absolute -right-4 -bottom-4 text-white/5" size={120} />
+               <h3 className="text-[11px] md:text-sm font-black uppercase tracking-widest mb-10 flex items-center gap-3"><ArrowRight size={24} className="text-blue-400" /> Projected Inventory Impact</h3>
+               <div className="space-y-4 relative z-10 no-scrollbar overflow-y-auto max-h-[500px]">
+                  {[...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
+                    const req = calculateRequirement(item);
+                    const avl = liveStockMap[item] || (foodNameMap[item] ? liveStockMap[foodNameMap[item]] : 0) || 0;
+                    const balanceAfter = avl - req;
+                    const isBorrowed = balanceAfter < 0;
+                    const pct = avl > 0 ? Math.max(0, Math.min(100, (balanceAfter / avl) * 100)) : 0;
+
+                    return (
+                      <div key={item} className={`p-4 border group transition-all rounded-2xl ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/10 border-white/10'}`}>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-[12px] font-black uppercase">{item}</span>
+                          <span className="text-[10px] font-bold text-white/60">REQ: {req.toFixed(2)} KG</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-1.5 bg-white/10 overflow-hidden rounded-full">
+                             {/* eslint-disable-next-line */}
+                             <div className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : 'bg-green-400'}`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className={`text-[10px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/80'}`}>
+                            {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(2)} KG उसने` : `${balanceAfter.toFixed(2)} KG REM`}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+               </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* BORROWED STOCK MODAL */}
       {showBorrowedModal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4">
-          <div className="bg-white max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden border border-amber-200">
+          <div className="bg-white max-w-lg w-full rounded-3xl shadow-2xl overflow-hidden border border-amber-200 animate-in fade-in zoom-in-95 duration-200">
             <div className="bg-amber-50 p-6 border-b border-amber-100 flex items-center gap-4">
               <div className="bg-amber-100 p-3 rounded-full text-amber-600"><AlertTriangle size={32} /></div>
               <div><h3 className="text-xl font-black text-amber-900">अपुरा साठा (Insufficient Stock)</h3><p className="text-amber-700/80 text-sm font-bold mt-1">स्टॉक शिल्लक नसल्यामुळे धान्य उसने घ्यावे लागेल.</p></div>
@@ -496,8 +520,13 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
               </div>
             </div>
             <div className="p-6 bg-slate-50 border-t flex gap-3">
-              <button onClick={() => setShowBorrowedModal(false)} className="flex-1 bg-white border-2 py-3 rounded-xl font-black text-xs uppercase">रद्द करा</button>
-              <button onClick={performSave} className="flex-1 bg-amber-500 text-white py-3 rounded-xl font-black text-xs uppercase flex items-center justify-center gap-2"><Utensils size={16} /> उसणे धान्य वापरा</button>
+              <button onClick={() => setShowBorrowedModal(false)} className="flex-1 bg-white border-2 py-3 rounded-xl font-black text-xs uppercase shadow-sm">रद्द करा</button>
+              <button 
+                onClick={performSave} 
+                className="flex-1 bg-amber-500 text-white py-3 rounded-xl font-black text-xs uppercase flex items-center justify-center gap-2 shadow-lg shadow-amber-200 transition-all active:scale-95"
+              >
+                <Utensils size={16} /> उसणे धान्य वापरा
+              </button>
             </div>
           </div>
         </div>

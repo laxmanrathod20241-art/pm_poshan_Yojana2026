@@ -297,12 +297,6 @@ export default function ConsumptionLog() {
       }
 
       setStatus({ type: 'success', text: isEditing ? 'नोंद अपडेट केली (Log updated)!' : 'नोंद यशस्वीरित्या जतन केली (Log submitted)!' });
-      setIsEditing(true);
-      fetchMenuAndStock();
-    } catch (err: any) {
-      console.error('Save Error:', err);
-      alert("⚠️ ERROR: " + err.message);
-      setStatus({ type: 'error', text: `त्रुटी: ${err.message}` });
     } finally {
       setLoading(false);
     }
@@ -453,10 +447,13 @@ export default function ConsumptionLog() {
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-1.5 bg-white/10 overflow-hidden">
+                          {/* eslint-disable-next-line */}
                           <div
                             className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : (isLow ? 'bg-amber-400' : 'bg-green-400')}`}
                             style={{ width: `${Math.max(0, Math.min(100, (balanceAfter / (stock?.current_balance || 1)) * 100))}%` }}
-                          ></div>
+                          >
+                            
+                          </div>
                         </div>
                         <span className={`text-[10px] font-black ${isBorrowed ? 'text-red-400' : (isLow ? 'text-amber-300' : 'text-white/80')}`}>
                           {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(2)} KG BORROWED` : `${balanceAfter.toFixed(2)} KG REMAINING`}

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout';
-import { Loader2, Save, Printer, RefreshCw, AlertCircle } from 'lucide-react';
+import { Loader2, Save, Printer, RefreshCw, AlertCircle, Calculator, ArrowRight } from 'lucide-react';
 
 interface MenuItem {
   item_code: string;
@@ -33,7 +33,7 @@ export default function DailyLedgerReport() {
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
 
   const [schoolName, setSchoolName] = useState('');
-  
+
   // Columns
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   // Generated Matrix Data
@@ -396,19 +396,19 @@ export default function DailyLedgerReport() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-center">
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-center">
               <div className="flex bg-slate-100/50 p-1.5 rounded-2xl border border-slate-100 w-full min-[400px]:w-auto">
-                <select 
-                  value={selectedMonth} 
-                  onChange={e => setSelectedMonth(Number(e.target.value))} 
+                <select
+                  value={selectedMonth}
+                  onChange={e => setSelectedMonth(Number(e.target.value))}
                   className="bg-transparent px-4 py-2 font-black text-xs md:text-sm text-slate-700 outline-none min-w-[100px]"
                 >
-                  {marathiMonths.map((m, i) => <option key={i+1} value={i+1}>{m}</option>)}
+                  {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
                 </select>
                 <div className="w-[1.5px] h-6 bg-slate-200 my-auto" />
-                <select 
-                  value={selectedYear} 
-                  onChange={e => setSelectedYear(Number(e.target.value))} 
+                <select
+                  value={selectedYear}
+                  onChange={e => setSelectedYear(Number(e.target.value))}
                   className="bg-transparent px-4 py-2 font-black text-xs md:text-sm text-slate-700 outline-none min-w-[80px]"
                 >
                   {years.map(y => <option key={y} value={y}>{y}</option>)}
@@ -427,9 +427,9 @@ export default function DailyLedgerReport() {
                 </button>
 
                 {!isSaved ? (
-                  <button 
-                    onClick={handleSave} 
-                    disabled={loading || !ledgerData} 
+                  <button
+                    onClick={handleSave}
+                    disabled={loading || !ledgerData}
                     className="flex-[2] bg-blue-600 text-white px-6 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200 active:scale-95 disabled:opacity-50"
                   >
                     {loading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />} Save Record
@@ -453,9 +453,9 @@ export default function DailyLedgerReport() {
                 <p className="text-[10px] font-bold text-amber-700/80 mt-1">Updates to daily logs aren't shown in snapshots. Click "Sync Live Data" to refresh.</p>
               </div>
             </div>
-            <button 
-               onClick={() => fetchLedgerData(userId!, selectedMonth, selectedYear, true)}
-               className="text-[10px] font-black text-amber-800 underline uppercase hover:text-amber-950 px-3 py-1.5"
+            <button
+              onClick={() => fetchLedgerData(userId!, selectedMonth, selectedYear, true)}
+              className="text-[10px] font-black text-amber-800 underline uppercase hover:text-amber-950 px-3 py-1.5"
             >
               Update Now
             </button>
@@ -464,7 +464,8 @@ export default function DailyLedgerReport() {
 
 
         <div className="bg-white print:p-0 print:m-0 w-full font-['Inter']">
-          <style dangerouslySetInnerHTML={{__html: `
+          <style dangerouslySetInnerHTML={{
+            __html: `
             @media print {
               @page { size: landscape; margin: 5mm; }
               body { -webkit-print-color-adjust: exact; background: white; }
@@ -473,29 +474,54 @@ export default function DailyLedgerReport() {
           `}} />
           
           {loading ? (
-             <div className="h-[50vh] flex flex-col justify-center items-center print:hidden space-y-4">
-                 <Loader2 size={40} className="animate-spin text-[#474379]" />
-                 <p className="font-bold text-slate-400 animate-pulse text-sm">कॅल्क्युलेशन सुरू आहे...</p>
-             </div>
+            <div className="h-[50vh] flex flex-col justify-center items-center print:hidden space-y-4">
+              <div className="relative">
+                <Loader2 size={60} className="animate-spin text-blue-600/20" />
+                <Calculator size={30} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-blue-600 animate-pulse" />
+              </div>
+              <p className="font-extrabold text-slate-500 uppercase tracking-widest text-[10px]">Processing Matrix Calculations...</p>
+            </div>
           ) : ledgerData && menuItems.length > 0 ? (
-            <div className="print:border-none border-2 border-slate-200 shadow-md p-4 print:p-0 overflow-hidden w-full relative">
-              
-              <div className="text-center mb-6 print:mb-4 border-b-2 border-black pb-4">
-                <h1 className="text-xl md:text-2xl font-black mb-1.5 uppercase tracking-wide">प्रतिदिन शिजवलेल्या अन्नधान्याची खतावणी</h1>
-                <h2 className="text-sm font-extrabold text-gray-800">
-                  शाळेचे नाव: <span className="underline decoration-dotted underline-offset-4 mr-8">{schoolName || '____________________'}</span> 
-                  माहे: <span className="underline decoration-dotted underline-offset-4">{marathiMonths[selectedMonth-1]} {selectedYear}</span>
-                </h2>
+            <div className="print:border-none md:border-2 border-slate-200 md:shadow-2xl md:rounded-3xl p-4 md:p-10 print:p-0 overflow-hidden w-full relative bg-white">
+
+              <div className="text-center mb-8 md:mb-12 print:mb-4 md:border-b-4 border-slate-900 pb-8 flex flex-col md:flex-row justify-between items-center gap-6">
+                <div className="text-left">
+                  <h1 className="text-xl md:text-4xl font-black mb-2 uppercase tracking-tighter leading-none italic text-slate-900">खतावणी <span className="text-blue-600 underline decoration-blue-200">अहवाल</span></h1>
+                  <p className="text-[10px] md:text-sm font-black text-slate-400 uppercase tracking-[0.3em]">Daily Consumption Ledger Matrix</p>
+                </div>
+                <div className="bg-slate-900 text-white p-5 rounded-3xl text-right flex flex-col items-end min-w-[240px]">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Current Period</p>
+                  <h2 className="text-xl md:text-2xl font-black italic uppercase leading-none">
+                    {marathiMonths[selectedMonth - 1]} {selectedYear}
+                  </h2>
+                  <div className="w-full h-px bg-white/10 my-3" />
+                  <p className="text-[10px] font-black uppercase italic text-blue-400">School: {schoolName || 'Not Set'}</p>
+                </div>
               </div>
 
-              <div className="overflow-x-auto print:overflow-visible pb-10 custom-scrollbar">
-                <style dangerouslySetInnerHTML={{__html: `
+              {/* Mobile Scroll Hint */}
+              <div className="md:hidden flex items-center justify-center gap-2 mb-4 bg-blue-50 p-3 rounded-2xl border border-blue-100 animate-pulse">
+                <ArrowRight size={16} className="text-blue-600" />
+                <span className="text-[10px] font-black text-blue-900 uppercase tracking-widest">Swipe left to view items</span>
+              </div>
+
+              <div className="overflow-x-auto print:overflow-visible pb-10 custom-scrollbar group relative">
+                {/* Horizontal Scroll Shadow Hint */}
+                <div className="absolute right-0 top-0 bottom-10 w-20 bg-gradient-to-l from-white to-transparent pointer-events-none z-10 md:hidden opacity-100 group-scroll-end:opacity-0 transition-opacity" />
+
+                <h2 className="text-center font-bold text-lg mb-6 print:block hidden border-b-2 border-black pb-4 text-slate-900">
+                  शाळेचे नाव: <span className="underline decoration-dotted underline-offset-4 mr-8">{schoolName || '____________________'}</span>
+                  माहे: <span className="underline decoration-dotted underline-offset-4">{marathiMonths[selectedMonth - 1]} {selectedYear}</span>
+                </h2>
+
+                <style dangerouslySetInnerHTML={{
+                  __html: `
                   .custom-scrollbar::-webkit-scrollbar { height: 12px; }
                   .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
                   .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid #f1f5f9; }
                   .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
                 `}} />
-                
+
                 <table className="min-w-max border-collapse border border-black text-[11px] print:text-[10px] whitespace-nowrap !w-full">
                   <thead>
                     <tr className="bg-gray-100 print:bg-transparent">
@@ -504,9 +530,9 @@ export default function DailyLedgerReport() {
                       <th className="border border-black print:border-[1px] p-2 text-center w-40" rowSpan={2}>मेनूचा प्रकार</th>
                       <th className="border border-black print:border-[1px] p-2 text-center" colSpan={2}>उपस्थिती (पट)</th>
                       {menuItems.map(m => (
-                         <th key={m.item_code} className="border border-black print:border-[1px] p-2 text-center break-words max-w-[100px] whitespace-normal" rowSpan={2}>
-                           {m.item_name}
-                         </th>
+                        <th key={m.item_code} className="border border-black print:border-[1px] p-2 text-center break-words max-w-[100px] whitespace-normal" rowSpan={2}>
+                          {m.item_name}
+                        </th>
                       ))}
                       <th className="border border-black print:border-[1px] p-2 text-center w-20" rowSpan={2}>मानधन</th>
                     </tr>
@@ -515,7 +541,7 @@ export default function DailyLedgerReport() {
                       <th className="border border-black print:border-[1px] p-1 text-center bg-gray-50/50 print:bg-transparent text-[9px]">६-८</th>
                     </tr>
                   </thead>
-                  
+
                   <tbody>
                     <tr className="bg-yellow-50/30 print:bg-transparent font-bold">
                        <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={5}>१) मागील शिल्लक (Opening)</td>
@@ -532,11 +558,11 @@ export default function DailyLedgerReport() {
                        <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                     </tr>
                     <tr className="bg-gray-200/50 print:bg-transparent font-black">
-                       <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={5}>३) एकूण (Total = 1+2)</td>
-                       {menuItems.map(m => (
-                         <td key={'tot_'+m.item_code} className="border border-black print:border-[1px] p-1.5 text-right">{ledgerData.topSummaries.total[m.item_code]}</td>
-                       ))}
-                       <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
+                      <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={5}>३) एकूण (Total = 1+2)</td>
+                      {menuItems.map(m => (
+                        <td key={'tot_' + m.item_code} className="border border-black print:border-[1px] p-1.5 text-right">{ledgerData.topSummaries.total[m.item_code]}</td>
+                      ))}
+                      <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                     </tr>
                     
                     <tr>
@@ -560,51 +586,51 @@ export default function DailyLedgerReport() {
                     ))}
 
                     <tr className="bg-[#474379]/10 print:bg-transparent border-t-[3px] border-black">
-                       <td className="border border-black print:border-[1px] p-2 text-center font-black uppercase tracking-wider" colSpan={3}>
-                          एकूण शिजवले (Total Consumption)
-                       </td>
-                       <td className="border border-black print:border-[1px] p-2 text-center font-black">{ledgerData.footerTotals.primaryAtt}</td>
-                       <td className="border border-black print:border-[1px] p-2 text-center font-black">{ledgerData.footerTotals.upperAtt}</td>
-                       {menuItems.map(m => (
-                         <td key={'foot_'+m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black shadow-inner">
-                            {ledgerData.footerTotals.consumptions[m.item_code] === '0.000' ? '-' : ledgerData.footerTotals.consumptions[m.item_code]}
-                         </td>
-                       ))}
-                       <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                      <td className="border border-black print:border-[1px] p-2 text-center font-black uppercase tracking-wider" colSpan={3}>
+                        एकूण शिजवले (Total Consumption)
+                      </td>
+                      <td className="border border-black print:border-[1px] p-2 text-center font-black">{ledgerData.footerTotals.primaryAtt}</td>
+                      <td className="border border-black print:border-[1px] p-2 text-center font-black">{ledgerData.footerTotals.upperAtt}</td>
+                      {menuItems.map(m => (
+                        <td key={'foot_' + m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black shadow-inner">
+                          {ledgerData.footerTotals.consumptions[m.item_code] === '0.000' ? '-' : ledgerData.footerTotals.consumptions[m.item_code]}
+                        </td>
+                      ))}
+                      <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                     </tr>
                     
                     <tr className="bg-amber-50/50 print:bg-transparent font-black text-xs print:text-[10px]">
-                       <td className="border border-black print:border-[1px] p-2 text-center text-amber-700 print:text-black tracking-widest" colSpan={5}>
-                          ४) उसणे घेतलेले धान्य (Borrowed Stock)
-                       </td>
-                       {menuItems.map(m => {
-                          const tot = Number(ledgerData.topSummaries.total[m.item_code]) || 0;
-                          const cons = Number(ledgerData.footerTotals.consumptions[m.item_code]) || 0;
-                          const borrowed = Math.max(0, cons - tot).toFixed(3);
-                          return (
-                            <td key={'borrow_'+m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black text-amber-600 print:text-black">
-                              {borrowed === '0.000' ? '-' : borrowed}
-                            </td>
-                          )
-                       })}
-                       <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                      <td className="border border-black print:border-[1px] p-2 text-center text-amber-700 print:text-black tracking-widest" colSpan={5}>
+                        ४) उसणे घेतलेले धान्य (Borrowed Stock)
+                      </td>
+                      {menuItems.map(m => {
+                        const tot = Number(ledgerData.topSummaries.total[m.item_code]) || 0;
+                        const cons = Number(ledgerData.footerTotals.consumptions[m.item_code]) || 0;
+                        const borrowed = Math.max(0, cons - tot).toFixed(3);
+                        return (
+                          <td key={'borrow_' + m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black text-amber-600 print:text-black">
+                            {borrowed === '0.000' ? '-' : borrowed}
+                          </td>
+                        )
+                      })}
+                      <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                     </tr>
-                    
+
                     <tr className="bg-gray-100 print:bg-transparent font-black text-xs print:text-[10px]">
-                       <td className="border border-black print:border-[1px] p-2 text-center text-red-600 print:text-black tracking-widest" colSpan={5}>
-                          ५) अखेर शिल्लक (Closing Balance = Total - Consumed)
-                       </td>
-                       {menuItems.map(m => {
-                          const tot = Number(ledgerData.topSummaries.total[m.item_code]) || 0;
-                          const cons = Number(ledgerData.footerTotals.consumptions[m.item_code]) || 0;
-                          const closing = Math.max(0, tot - cons).toFixed(3);
-                          return (
-                            <td key={'close_'+m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black">
-                              {closing === '0.000' ? '-' : closing}
-                            </td>
-                          )
-                       })}
-                       <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                      <td className="border border-black print:border-[1px] p-2 text-center text-red-600 print:text-black tracking-widest" colSpan={5}>
+                        ५) अखेर शिल्लक (Closing Balance = Total - Consumed)
+                      </td>
+                      {menuItems.map(m => {
+                        const tot = Number(ledgerData.topSummaries.total[m.item_code]) || 0;
+                        const cons = Number(ledgerData.footerTotals.consumptions[m.item_code]) || 0;
+                        const closing = Math.max(0, tot - cons).toFixed(3);
+                        return (
+                          <td key={'close_' + m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black">
+                            {closing === '0.000' ? '-' : closing}
+                          </td>
+                        )
+                      })}
+                      <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                     </tr>
 
                   </tbody>
@@ -630,9 +656,9 @@ export default function DailyLedgerReport() {
             </div>
           ) : (
             <div className="h-64 flex items-center justify-center border-2 border-dashed border-slate-300 rounded-xl m-6">
-               <p className="text-slate-400 font-bold uppercase tracking-widest text-sm text-center">
-                 या महिन्यासाठी मेनू मास्टर आणि <br/>उपस्थिती माहिती उपलब्ध नाही.
-               </p>
+              <p className="text-slate-400 font-bold uppercase tracking-widest text-sm text-center">
+                या महिन्यासाठी मेनू मास्टर आणि <br />उपस्थिती माहिती उपलब्ध नाही.
+              </p>
             </div>
           )}
         </div>

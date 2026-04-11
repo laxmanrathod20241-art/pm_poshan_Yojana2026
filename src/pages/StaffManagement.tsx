@@ -82,7 +82,7 @@ export default function StaffManagement() {
 
     let error;
     if (editingStaffId) {
-      const res = await (supabase as any).from('cooking_staff').update(payload).eq('id', editingStaffId);
+      const res = await supabase.from('cooking_staff').update(payload).eq('id', editingStaffId);
       error = res.error;
     } else {
       const res = await (supabase as any).from('cooking_staff').insert([payload]);

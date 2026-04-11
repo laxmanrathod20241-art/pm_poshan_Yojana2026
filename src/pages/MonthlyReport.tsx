@@ -54,7 +54,6 @@ export default function MonthlyReport() {
       setStaffTotal((staff || []).reduce((acc: number, curr: any) => acc + Number(curr.monthly_cost), 0));
 
       if (snapshot && snapshot.report_data) {
-        // Load strictly from snapshot to preserve integrity
         setIsSaved(true);
         const parsed = typeof snapshot.report_data === 'string' 
             ? JSON.parse(snapshot.report_data) 
@@ -65,15 +64,8 @@ export default function MonthlyReport() {
       }
 
       // If no snapshot, compute engine dynamically:
-      // A. Fetch Menu/Items
       const { data: menuMaster } = await (supabase as any).from('menu_master').select('*').eq('teacher_id', id);
 
-      // B. Fetch Previous Month Snapshot (for Opening Balance)
-      let prevMonth = month - 1;
-      let prevYear = year;
-      if (prevMonth === 0) { prevMonth = 12; prevYear = year - 1; }
-      
-      // C. Safe String Date Boundaries
       const currentMonthStart = `${year}-${String(month).padStart(2, '0')}-01`;
       const nMonth = month === 12 ? 1 : month + 1;
       const nYear = month === 12 ? year + 1 : year;

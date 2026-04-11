@@ -297,7 +297,9 @@ export default function StockRegister() {
                   />
                 </div>
               </div>
-              <div className="overflow-x-auto">
+
+              {/* Advanced Responsive View: Table for Desktop, Cards for Mobile */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-300 text-[11px] font-extrabold text-[#3c8dbc] uppercase tracking-widest">
@@ -315,7 +317,6 @@ export default function StockRegister() {
                     ) : inventory.filter(inv => {
                         const search = searchTerm.toLowerCase();
                         if (!search) return true;
-                        
                         const itemReceipts = monthlyReceipts.filter(r => r.item_name === inv.item_name);
                         const lastReceipt = itemReceipts.length > 0 ? itemReceipts[0].receipt_date : null;
                         const displayDate = lastReceipt 
@@ -342,47 +343,82 @@ export default function StockRegister() {
                           return inv.item_name.toLowerCase().includes(search) || displayDate.includes(search);
                         })
                         .map((inv) => {
-                        const monthlyTotal = calculateMonthlyTotal(inv.item_name);
-                        const balance = Number(inv.current_balance);
-                        const status = getStatusColor(balance);
-                        
-                        // Find the latest receipt date for this item from monthly receipts
-                        const itemReceipts = monthlyReceipts.filter(r => r.item_name === inv.item_name);
-                        const lastReceipt = itemReceipts.length > 0 ? itemReceipts[0].receipt_date : null;
-                        
-                        const displayDate = lastReceipt 
-                          ? new Date(lastReceipt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' })
-                          : (inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '-');
-
-                        return (
-                          <tr key={inv.id} className={`border-b border-slate-200 transition-colors ${status.bg}`}>
-                            <td className="p-4 text-[12px] font-bold text-slate-500 border-r border-slate-200">{displayDate}</td>
-                            <td className="p-4 text-[14px] font-extrabold text-slate-800 border-r border-slate-200">{inv.item_name}</td>
-                            <td className="p-4 text-[13px] font-semibold text-slate-600 border-r border-slate-200">{monthlyTotal.toFixed(2)} kg</td>
-                            <td className={`p-4 text-[15px] font-black border-r border-slate-200 ${status.text}`}>
-                              {balance < 0 ? (
-                                <div className="flex flex-col">
-                                  <span className="text-red-600 line-through opacity-40 text-xs">0.00 kg</span>
-                                  <span className="text-[16px] animate-pulse">-{Math.abs(balance).toFixed(2)} kg</span>
-                                </div>
-                              ) : (
-                                `${balance.toFixed(2)} kg`
-                              )}
-                            </td>
-                            <td className="p-4 text-center border-r border-slate-200">
-                              <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase text-white ${status.badge} shadow-sm`}>
-                                {balance < 0 ? '⚠️ उसणे बाकी' : status.label}
-                              </span>
-                            </td>
-                            <td className="p-4 text-center">
-                              <button onClick={() => handleDeleteInventoryItem(inv.id)} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button>
-                            </td>
-                          </tr>
-                        );
-                      })
+                          const monthlyTotal = calculateMonthlyTotal(inv.item_name);
+                          const balance = Number(inv.current_balance);
+                          const status = getStatusColor(balance);
+                          const itemReceipts = monthlyReceipts.filter(r => r.item_name === inv.item_name);
+                          const lastReceipt = itemReceipts.length > 0 ? itemReceipts[0].receipt_date : null;
+                          const displayDate = lastReceipt ? new Date(lastReceipt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : (inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '-');
+                          return (
+                            <tr key={inv.id} className={`border-b border-slate-200 transition-colors ${status.bg}`}>
+                              <td className="p-4 text-[12px] font-bold text-slate-500 border-r border-slate-200">{displayDate}</td>
+                              <td className="p-4 text-[14px] font-extrabold text-slate-800 border-r border-slate-200">{inv.item_name}</td>
+                              <td className="p-4 text-[13px] font-semibold text-slate-600 border-r border-slate-200">{monthlyTotal.toFixed(2)} kg</td>
+                              <td className={`p-4 text-[15px] font-black border-r border-slate-200 ${status.text}`}>
+                                {balance < 0 ? (
+                                  <div className="flex flex-col">
+                                    <span className="text-red-600 line-through opacity-40 text-xs">0.00 kg</span>
+                                    <span className="text-[16px] animate-pulse">-{Math.abs(balance).toFixed(2)} kg</span>
+                                  </div>
+                                ) : (
+                                  `${balance.toFixed(2)} kg`
+                                )}
+                              </td>
+                              <td className="p-4 text-center border-r border-slate-200">
+                                <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase text-white ${status.badge} shadow-sm`}>
+                                  {balance < 0 ? '⚠️ उसणे बाकी' : status.label}
+                                </span>
+                              </td>
+                              <td className="p-4 text-center">
+                                <button onClick={() => handleDeleteInventoryItem(inv.id)} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button>
+                              </td>
+                            </tr>
+                          );
+                        })
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Mobile Card List View */}
+              <div className="md:hidden divide-y divide-slate-100">
+                {fetchLoading ? (
+                   <div className="p-10 text-center text-xs font-black text-slate-400">LOADING INVENTORY...</div>
+                ) : inventory.filter(inv => {
+                    const search = searchTerm.toLowerCase();
+                    return inv.item_name.toLowerCase().includes(search);
+                  }).length === 0 ? (
+                  <div className="p-10 text-center text-xs font-black text-slate-400 uppercase tracking-widest">No matching stock found.</div>
+                ) : (
+                  inventory
+                    .filter(inv => inv.item_name.toLowerCase().includes(searchTerm.toLowerCase()))
+                    .map((inv) => {
+                      const monthlyTotal = calculateMonthlyTotal(inv.item_name);
+                      const balance = Number(inv.current_balance);
+                      const status = getStatusColor(balance);
+                      return (
+                        <div key={inv.id} className={`p-5 flex justify-between items-center transition-all ${status.bg}`}>
+                          <div className="space-y-1">
+                            <h4 className="text-[14px] font-black text-slate-800 uppercase tracking-tight">{inv.item_name}</h4>
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white ${status.badge}`}>
+                                {balance < 0 ? 'उसणे (Debt)' : status.label}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-400">Total: {monthlyTotal.toFixed(1)}kg</span>
+                            </div>
+                          </div>
+                          <div className="text-right flex flex-col items-end gap-2">
+                            <span className={`text-lg font-black tracking-tighter ${status.text}`}>
+                               {balance < 0 ? `-${Math.abs(balance).toFixed(2)}` : balance.toFixed(2)} <span className="text-[10px] uppercase opacity-40">kg</span>
+                            </span>
+                            <button onClick={() => handleDeleteInventoryItem(inv.id)} className="p-2 bg-red-50 text-red-500 rounded-lg hover:bg-red-500 hover:text-white transition-all shadow-sm">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                )}
               </div>
             </div>
           </div>

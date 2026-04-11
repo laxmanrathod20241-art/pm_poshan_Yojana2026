@@ -29,7 +29,6 @@ export default function ItemLedgerReport() {
   const [selectedItemName, setSelectedItemName] = useState<string>('');
 
   const [schoolName, setSchoolName] = useState('');
-  const [centerName, setCenterName] = useState('');
   
   const [reportMatrix, setReportMatrix] = useState<any[]>([]);
   const [reportMonths, setReportMonths] = useState<{month: number, year: number, label: string}[]>([]);
