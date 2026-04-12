@@ -75,7 +75,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     
     try 
     {
-      const [masterRes, enrollmentRes, existingLogRes, consumptionLogRes] = await Promise.all([
+      const [masterRes, enrollmentRes, existingLogRes, consumptionLogRes, profileRes] = await Promise.all([
         (supabase as any).from('menu_master').select('*').eq('teacher_id', userId),
         (supabase as any).from('student_enrollment').select('*').eq('teacher_id', userId).maybeSingle(),
         (supabase as any).from('daily_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle(),
@@ -83,13 +83,23 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         (supabase as any).from('profiles').select('has_primary, has_upper_primary').eq('id', userId).single()
       ]);
 
+      console.log("DailyLogForm Init Trace:", {
+        targetDate,
+        masterCount: masterRes.data?.length || 0,
+        hasEnrollment: !!enrollmentRes.data,
+        hasExistingLog: !!existingLogRes.data,
+        hasConsumption: !!consumptionLogRes.data,
+        hasProfile: !!profileRes.data
+      });
+
 
       const mapping: Record<string, string> = {};
       const gramsMap: Record<string, {primary: number, upper: number}> = {};
       
       if (masterRes.data) {
-        setMasterMainFoods(masterRes.data.filter((i: any) => i.item_category === 'MAIN'));
-        setMasterIngredients(masterRes.data.filter((i: any) => i.item_category === 'INGREDIENT'));
+        console.log("Fetched Master Menu Items:", masterRes.data);
+        setMasterMainFoods(masterRes.data.filter((i: any) => String(i.item_category).toUpperCase() === 'MAIN'));
+        setMasterIngredients(masterRes.data.filter((i: any) => String(i.item_category).toUpperCase() === 'INGREDIENT'));
         masterRes.data.forEach((m: any) => {
           mapping[m.item_code] = m.item_name;
           gramsMap[m.item_name] = { primary: m.grams_primary, upper: m.grams_upper_primary };
@@ -442,6 +452,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                     <div>
                       <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">मुख्य आहार (Main Dishes)</label>
                       <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center mb-3">
+                        {localMainFoods.length === 0 && <span className="text-[10px] font-bold text-slate-400 italic px-2">No main dishes selected or available.</span>}
                         {localMainFoods.map(item => (
                           <span key={item} className="bg-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black text-white uppercase flex items-center gap-2 shadow-md">
                             {item} <Trash2 size={14} className="cursor-pointer" onClick={() => handleRemoveMainFood(item)} />
@@ -463,6 +474,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                     <div>
                       <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">घटक (Ingredients)</label>
                       <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center">
+                        {localIngredients.length === 0 && <span className="text-[10px] font-bold text-slate-400 italic px-2">No ingredients selected or available.</span>}
                         {localIngredients.map(item => (
                           <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2">
                             {item} <Trash2 size={14} className="cursor-pointer text-blue-400" onClick={() => handleRemoveIngredient(item)} />
