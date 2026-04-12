@@ -717,7 +717,6 @@ export default function DailyLedgerReport() {
             </div>
           )}
         </div>
-
       </div>
     </Layout>
   );
