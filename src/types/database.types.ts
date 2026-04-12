@@ -69,6 +69,8 @@ export interface Database {
           school_id: string | null
           school_name_mr: string | null
           center_name_mr: string | null
+          has_primary: boolean | null
+          has_upper_primary: boolean | null
           created_at: string | null
         }
         Insert: {
@@ -81,6 +83,8 @@ export interface Database {
           school_id?: string | null
           school_name_mr?: string | null
           center_name_mr?: string | null
+          has_primary?: boolean | null
+          has_upper_primary?: boolean | null
           created_at?: string | null
         }
         Update: {
@@ -93,6 +97,8 @@ export interface Database {
           school_id?: string | null
           school_name_mr?: string | null
           center_name_mr?: string | null
+          has_primary?: boolean | null
+          has_upper_primary?: boolean | null
           created_at?: string | null
         }
       }

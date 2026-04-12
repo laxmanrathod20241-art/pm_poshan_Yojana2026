@@ -36,6 +36,10 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   const [existingLogId, setExistingLogId] = useState<string | null>(null);
   const [status, setStatus] = useState({ type: '', text: '' });
   
+  // Section Configuration
+  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
+  
   // Master Data & Template Logic
   const [masterMainFoods, setMasterMainFoods] = useState<any[]>([]);
   const [masterIngredients, setMasterIngredients] = useState<any[]>([]);
@@ -75,7 +79,8 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         (supabase as any).from('menu_master').select('*').eq('teacher_id', userId),
         (supabase as any).from('student_enrollment').select('*').eq('teacher_id', userId).maybeSingle(),
         (supabase as any).from('daily_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle(),
-        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle()
+        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle(),
+        (supabase as any).from('profiles').select('has_primary, has_upper_primary').eq('id', userId).single()
       ]);
 
 
@@ -100,6 +105,11 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
           primary: (e.std_1 || 0) + (e.std_2 || 0) + (e.std_3 || 0) + (e.std_4 || 0) + (e.std_5 || 0),
           upper: (e.std_6 || 0) + (e.std_7 || 0) + (e.std_8 || 0)
         });
+      }
+
+      if (profileRes.data) {
+        setHasPrimary(profileRes.data.has_primary ?? true);
+        setHasUpperPrimary(profileRes.data.has_upper_primary ?? true);
       }
 
       // FIX 1: Timezone Safe Date Parsing & Week of the Month Logic
@@ -208,11 +218,11 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         setStatus({ type: 'error', text: 'कृपया विद्यार्थ्यांची उपस्थिती प्रविष्ट करा.' });
         return;
       }
-      if (enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) {
+      if (hasPrimary && enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) {
         setStatus({ type: 'error', text: 'प्राथमिक उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.' });
         return;
       }
-      if (enrollment.upper > 0 && Number(upperCount) > enrollment.upper) {
+      if (hasUpperPrimary && enrollment.upper > 0 && Number(upperCount) > enrollment.upper) {
         setStatus({ type: 'error', text: 'उच्च प्राथमिक उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.' });
         return;
       }
@@ -404,15 +414,19 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                 <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
                   <Calculator size={18} className="text-[#3c8dbc]" /> Attendance Input
                 </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all">
-                     <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Primary (I-V)</label>
-                    <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${(enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
-                  </div>
-                  <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all">
-                     <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Upper (VI-VIII)</label>
-                    <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${(enrollment.upper > 0 && Number(upperCount) > enrollment.upper) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
-                  </div>
+                <div className={`grid ${hasPrimary && hasUpperPrimary ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
+                  {hasPrimary && (
+                    <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
+                       <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Primary (I-V)</label>
+                      <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${(enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                    </div>
+                  )}
+                  {hasUpperPrimary && (
+                    <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
+                       <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Upper (VI-VIII)</label>
+                      <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${(enrollment.upper > 0 && Number(upperCount) > enrollment.upper) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-6 bg-blue-50/50 border-2 border-blue-200/50 rounded-2xl space-y-6">

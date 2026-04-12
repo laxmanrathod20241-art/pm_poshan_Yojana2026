@@ -28,6 +28,10 @@ export default function MonthlyReport() {
   const [schoolName, setSchoolName] = useState('');
   const [fuelTotal, setFuelTotal] = useState(0);
   const [staffTotal, setStaffTotal] = useState(0);
+  
+  // Section Configuration
+  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -64,8 +68,12 @@ export default function MonthlyReport() {
       }
 
       // 2. Fetch Profile Info
-      const { data: profile } = await (supabase as any).from('profiles').select('school_name_mr').eq('id', id).maybeSingle();
-      if (profile) setSchoolName(profile.school_name_mr || '');
+      const { data: profile } = await (supabase as any).from('profiles').select('school_name_mr, has_primary, has_upper_primary').eq('id', id).maybeSingle();
+      if (profile) {
+        setSchoolName(profile.school_name_mr || '');
+        setHasPrimary(profile.has_primary ?? true);
+        setHasUpperPrimary(profile.has_upper_primary ?? true);
+      }
 
       // 3. Fetch Logistics (Fuel & Staff)
       const { data: fuel } = await (supabase as any).from('fuel_tracking').select('monthly_cost').eq('teacher_id', id).eq('record_month', month).eq('record_year', year);
@@ -148,8 +156,8 @@ export default function MonthlyReport() {
           const total = openBal + received;
           
           const consumed = calculateConsumedKg(
-            totalPrimaryMeals, 
-            totalUpperMeals, 
+            (hasPrimary ? totalPrimaryMeals : 0), 
+            (hasUpperPrimary ? totalUpperMeals : 0), 
             Number(item.grams_primary || 0), 
             Number(item.grams_upper_primary || 0)
           );
@@ -305,8 +313,9 @@ export default function MonthlyReport() {
           {loading ? (
              <div className="h-64 flex justify-center items-center print:hidden"><Loader2 size={40} className="animate-spin text-indigo-500" /></div>
           ) : (
-            <div ref={printRef} className="print-content w-full">
-              <div className="bg-white print:border-none border-2 border-slate-200 shadow-md p-4 print:p-0 overflow-hidden w-full relative">
+            <div className="w-full overflow-x-auto print:overflow-visible pb-10 custom-scrollbar">
+              <div ref={printRef} className="print-content w-full min-w-[900px] print:min-w-0 mx-auto">
+                <div className="bg-white print:border-none border-2 border-slate-200 shadow-md p-8 print:p-0 w-full relative">
               
               <div className="text-center mb-4 print:mb-3 border-b-2 border-black pb-3">
                 <h1 className="text-xl md:text-2xl font-black mb-1.5 uppercase tracking-wide">प्रधानमंत्री पोषण शक्ती निर्माण योजना — मासिक अहवाल</h1>
@@ -328,8 +337,8 @@ export default function MonthlyReport() {
                   ];
 
                   return (
-                    <div className="overflow-x-auto print:overflow-visible print:h-auto print:block pb-10 custom-scrollbar">
-                      <table className="w-full border-collapse border border-slate-950 table-fixed text-[10px] print:text-[10px]">
+                    <div className="w-full pb-10">
+                      <table className="w-full border-collapse border border-slate-950 text-[10px] print:text-[10px]">
                         <thead>
                           <tr className="bg-white text-slate-950">
                             <th className="border border-slate-950 p-2 text-left w-32 font-black uppercase tracking-widest align-middle">
@@ -348,7 +357,7 @@ export default function MonthlyReport() {
                         <tbody>
                           {metrics.map((metric, midx) => (
                             <tr key={midx} className={`hover:bg-slate-50 transition-colors ${metric.color} print:bg-transparent`}>
-                              <td className="border border-slate-950 p-2 font-black text-left pl-2 uppercase tracking-tighter align-middle">
+                              <td className={`border border-slate-950 px-2 py-2 font-black text-left pl-2 uppercase tracking-tighter align-middle ${metric.key === 'closingBalance' ? 'font-black' : ''}`}>
                                 {metric.label}
                               </td>
                               {reportData.map((row, ridx) => {
@@ -356,7 +365,7 @@ export default function MonthlyReport() {
                                 const numVal = Number(val || 0);
                                 const isZero = numVal === 0;
                                 return (
-                                  <td key={ridx} className="border border-slate-950 px-0.5 py-1 text-right font-mono font-black text-slate-950 text-[14px] align-middle">
+                                  <td key={ridx} className={`border border-slate-950 px-1 py-2 text-right font-mono font-black text-slate-950 text-[14px] align-middle ${metric.key === 'closingBalance' ? 'font-black' : ''}`}>
                                     {isZero ? '-' : Number(numVal.toFixed(2))}
                                   </td>
                                 );
@@ -379,11 +388,11 @@ export default function MonthlyReport() {
               <div className="flex justify-center gap-8 mt-6 mb-12">
                  <div className="border border-slate-950 px-5 py-2 flex items-center gap-3 bg-white">
                     <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider">मानधन खर्च (Honorarium):</span>
-                    <span className="text-xl font-black text-slate-950">₹ {parseFloat(staffTotal).toFixed(2)}</span>
+                    <span className="text-lg font-bold text-slate-950">₹ {parseFloat(staffTotal).toFixed(2)}</span>
                  </div>
                  <div className="border border-slate-950 px-5 py-2 flex items-center gap-3 bg-white">
                     <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider">इंधन खर्च (Fuel Cost):</span>
-                    <span className="text-xl font-black text-slate-950">₹ {parseFloat(fuelTotal).toFixed(2)}</span>
+                    <span className="text-lg font-bold text-slate-950">₹ {parseFloat(fuelTotal).toFixed(2)}</span>
                  </div>
               </div>
 
@@ -400,11 +409,11 @@ export default function MonthlyReport() {
                  </div>
               </div>
 
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
-
+          )}
+        </div>
       </div>
     </Layout>
   );

@@ -18,6 +18,10 @@ export default function StudentEnrollment() {
   const [std6, setStd6] = useState<number>(0);
   const [std7, setStd7] = useState<number>(0);
   const [std8, setStd8] = useState<number>(0);
+  
+  // Section Configuration States
+  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
 
   // Calculations
   const totalPrimary = std1 + std2 + std3 + std4 + std5;
@@ -61,6 +65,18 @@ export default function StudentEnrollment() {
         setStd7(data.std_7 || 0);
         setStd8(data.std_8 || 0);
       }
+
+      // Also fetch configuration flags from profiles
+      const { data: profileData } = await (supabase as any)
+        .from('profiles')
+        .select('has_primary, has_upper_primary')
+        .eq('id', userId)
+        .single();
+      
+      if (profileData) {
+        setHasPrimary(profileData.has_primary ?? true);
+        setHasUpperPrimary(profileData.has_upper_primary ?? true);
+      }
     } catch (err: any) {
       console.error('Fetch error:', err.message);
     } finally {
@@ -76,19 +92,33 @@ export default function StudentEnrollment() {
     try {
       const { error } = await (supabase as any)
         .from('student_enrollment')
-        .upsert({
-          teacher_id: userId,
-          std_1: std1,
-          std_2: std2,
-          std_3: std3,
-          std_4: std4,
-          std_5: std5,
-          std_6: std6,
-          std_7: std7,
-          std_8: std8
-        });
+        .upsert(
+          {
+            teacher_id: userId,
+            std_1: std1,
+            std_2: std2,
+            std_3: std3,
+            std_4: std4,
+            std_5: std5,
+            std_6: std6,
+            std_7: std7,
+            std_8: std8
+          },
+          { onConflict: 'teacher_id' }
+        );
 
       if (error) throw error;
+
+      // Also save configuration flags to profiles table
+      const { error: profileError } = await (supabase as any)
+        .from('profiles')
+        .update({
+          has_primary: hasPrimary,
+          has_upper_primary: hasUpperPrimary
+        })
+        .eq('id', userId);
+
+      if (profileError) throw profileError;
       setMessage({ type: 'success', text: 'Enrollment registry updated successfully.' });
       setTimeout(() => setMessage({ type: '', text: '' }), 4000);
     } catch (err: any) {
@@ -127,6 +157,38 @@ export default function StudentEnrollment() {
     <Layout>
       <div className="w-[95%] max-w-[1400px] mx-auto z-10 relative pb-20 mt-6">
         
+        {/* School Category Configuration */}
+        <div className="bg-white border-2 border-slate-100 shadow-sm p-5 mb-8 flex flex-col md:flex-row items-center justify-between gap-6">
+           <div className="flex-1">
+              <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest mb-1 flex items-center gap-2 text-blue-600">
+                 System Configuration: School Sections
+              </h3>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">Toggle visibility of school sections across Enrollment and Daily Logs</p>
+           </div>
+           
+           <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-3 cursor-pointer group bg-slate-50 px-4 py-3 border-2 border-slate-100 transition-all hover:border-blue-200">
+                 <input 
+                    type="checkbox" 
+                    checked={hasPrimary} 
+                    onChange={(e) => setHasPrimary(e.target.checked)}
+                    className="w-5 h-5 rounded-none border-2 border-slate-300 text-blue-600 focus:ring-0 transition-all cursor-pointer"
+                 />
+                 <span className="text-[11px] font-black text-slate-700 uppercase tracking-widest group-hover:text-blue-600 transition-colors">Primary Section (1st - 5th)</span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer group bg-slate-50 px-4 py-3 border-2 border-slate-100 transition-all hover:border-[#474379]">
+                 <input 
+                    type="checkbox" 
+                    checked={hasUpperPrimary} 
+                    onChange={(e) => setHasUpperPrimary(e.target.checked)}
+                    className="w-5 h-5 rounded-none border-2 border-slate-300 text-[#474379] focus:ring-0 transition-all cursor-pointer"
+                 />
+                 <span className="text-[11px] font-black text-slate-700 uppercase tracking-widest group-hover:text-[#474379] transition-colors">Upper Primary Section (6th - 8th)</span>
+              </label>
+           </div>
+        </div>
+
         {/* Page Header */}
         <div className="mb-6 flex flex-col md:flex-row md:items-end justify-end border-b border-slate-200 pb-4 gap-4">
           <div className="bg-white/50 backdrop-blur-sm border border-slate-200 p-2.5 flex flex-col items-center min-w-[120px] shadow-sm">
@@ -148,46 +210,50 @@ export default function StudentEnrollment() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-8">
           
           {/* Primary Card */}
-          <div className="bg-white border-t-[6px] border-[#3c8dbc] shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden">
-             <div className="p-4 bg-blue-50/50 border-b border-slate-100">
-                <h3 className="text-sm font-black text-[#3c8dbc] uppercase tracking-wider flex items-center gap-2">
-                   Standard 1st - 5th (Primary)
-                </h3>
-             </div>
-             <div className="p-5 space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                   <InputField label="Std 1st" value={std1} onChange={setStd1} />
-                   <InputField label="Std 2nd" value={std2} onChange={setStd2} />
-                   <InputField label="Std 3rd" value={std3} onChange={setStd3} />
-                   <InputField label="Std 4th" value={std4} onChange={setStd4} />
-                   <InputField label="Std 5th" value={std5} onChange={setStd5} />
-                </div>
-                <div className="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between">
-                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Calculated Sub-Total</span>
-                   <span className="text-3xl font-black text-[#3c8dbc]">{totalPrimary}</span>
-                </div>
-             </div>
-          </div>
+          {hasPrimary && (
+            <div className="bg-white border-t-[6px] border-[#3c8dbc] shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden animate-in fade-in slide-in-from-left-4 duration-500">
+               <div className="p-4 bg-blue-50/50 border-b border-slate-100">
+                  <h3 className="text-sm font-black text-[#3c8dbc] uppercase tracking-wider flex items-center gap-2">
+                     Standard 1st - 5th (Primary)
+                  </h3>
+               </div>
+               <div className="p-5 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                     <InputField label="Std 1st" value={std1} onChange={setStd1} />
+                     <InputField label="Std 2nd" value={std2} onChange={setStd2} />
+                     <InputField label="Std 3rd" value={std3} onChange={setStd3} />
+                     <InputField label="Std 4th" value={std4} onChange={setStd4} />
+                     <InputField label="Std 5th" value={std5} onChange={setStd5} />
+                  </div>
+                  <div className="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between">
+                     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Calculated Sub-Total</span>
+                     <span className="text-3xl font-black text-[#3c8dbc]">{totalPrimary}</span>
+                  </div>
+               </div>
+            </div>
+          )}
 
           {/* Upper Primary Card */}
-          <div className="bg-white border-t-[6px] border-[#474379] shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden">
-             <div className="p-4 bg-slate-50 border-b border-slate-100">
-                <h3 className="text-sm font-black text-[#474379] uppercase tracking-wider flex items-center gap-2">
-                   Standard 6th - 8th (Upper Primary)
-                </h3>
-             </div>
-             <div className="p-5 space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                   <InputField label="Std 6th" value={std6} onChange={setStd6} />
-                   <InputField label="Std 7th" value={std7} onChange={setStd7} />
-                   <InputField label="Std 8th" value={std8} onChange={setStd8} />
-                </div>
-                <div className="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between">
-                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Calculated Sub-Total</span>
-                   <span className="text-3xl font-black text-[#474379]">{totalUpperPrimary}</span>
-                </div>
-             </div>
-          </div>
+          {hasUpperPrimary && (
+            <div className="bg-white border-t-[6px] border-[#474379] shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden animate-in fade-in slide-in-from-right-4 duration-500">
+               <div className="p-4 bg-slate-50 border-b border-slate-100">
+                  <h3 className="text-sm font-black text-[#474379] uppercase tracking-wider flex items-center gap-2">
+                     Standard 6th - 8th (Upper Primary)
+                  </h3>
+               </div>
+               <div className="p-5 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                     <InputField label="Std 6th" value={std6} onChange={setStd6} />
+                     <InputField label="Std 7th" value={std7} onChange={setStd7} />
+                     <InputField label="Std 8th" value={std8} onChange={setStd8} />
+                  </div>
+                  <div className="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between">
+                     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Calculated Sub-Total</span>
+                     <span className="text-3xl font-black text-[#474379]">{totalUpperPrimary}</span>
+                  </div>
+               </div>
+            </div>
+          )}
 
         </div>
 

@@ -11,6 +11,8 @@ export default function StockDemandReport() {
 
   const [workingDays, setWorkingDays] = useState<number>(20);
   const [classGroup, setClassGroup] = useState<'PRIMARY' | 'UPPER_PRIMARY'>('PRIMARY');
+  const [schoolName, setSchoolName] = useState<string>("");
+  const [centerName, setCenterName] = useState<string>("");
 
   const marathiMonths = ['जानेवारी', 'फेब्रुवारी', 'मार्च', 'एप्रिल', 'मे', 'जून', 'जुलै', 'ऑगस्ट', 'सप्टेंबर', 'ऑक्टोबर', 'नोव्हेंबर', 'डिसेंबर'];
   const years = ['2024', '2025', '2026', '2027'];
@@ -22,9 +24,12 @@ export default function StockDemandReport() {
 
   const reportPeriod = `${fromMonth} ${fromYear} ते ${tillMonth} ${tillYear}`;
 
-  const [schoolName, setSchoolName] = useState('');
-  const [centerName, setCenterName] = useState('');
   const [enrollmentCount, setEnrollmentCount] = useState<number>(0);
+  
+  // Section Configuration
+  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
+
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [inventoryBalances, setInventoryBalances] = useState<Record<string, number>>({});
 
@@ -67,13 +72,22 @@ export default function StockDemandReport() {
 
       const { data: profile } = await (supabase as any)
         .from('profiles')
-        .select('school_name_mr, center_name_mr')
+        .select('school_name_mr, center_name_mr, has_primary, has_upper_primary')
         .eq('id', id)
         .single();
 
       if (profile) {
-        setSchoolName(profile.school_name_mr || '');
-        setCenterName(profile.center_name_mr || '');
+        setSchoolName(profile.school_name_mr || "जिल्हा परिषद प्राथमिक शाळा");
+        setCenterName(profile.center_name_mr || "-");
+        
+        const hp = profile.has_primary ?? true;
+        const hup = profile.has_upper_primary ?? true;
+        setHasPrimary(hp);
+        setHasUpperPrimary(hup);
+
+        // Auto-select active section if one is disabled
+        if (!hp && hup) setClassGroup('UPPER_PRIMARY');
+        if (hp && !hup) setClassGroup('PRIMARY');
       }
 
       const { data: enrollment } = await (supabase as any)
@@ -198,18 +212,22 @@ export default function StockDemandReport() {
           <div className="flex-1 space-y-4">
             <div className="flex flex-wrap gap-4">
               <div className="flex bg-slate-100 p-1 rounded-lg">
-                <button
-                  onClick={() => setClassGroup('PRIMARY')}
-                  className={`px-4 py-2 text-xs font-black uppercase rounded ${classGroup === 'PRIMARY' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}
-                >
-                  १ ते ५ (Primary)
-                </button>
-                <button
-                  onClick={() => setClassGroup('UPPER_PRIMARY')}
-                  className={`px-4 py-2 text-xs font-black uppercase rounded ${classGroup === 'UPPER_PRIMARY' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}
-                >
-                  ६ ते ८ (Upper)
-                </button>
+                {hasPrimary && (
+                  <button
+                    onClick={() => setClassGroup('PRIMARY')}
+                    className={`px-4 py-2 text-xs font-black uppercase rounded ${classGroup === 'PRIMARY' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}
+                  >
+                    १ ते ५ (Primary)
+                  </button>
+                )}
+                {hasUpperPrimary && (
+                  <button
+                    onClick={() => setClassGroup('UPPER_PRIMARY')}
+                    className={`px-4 py-2 text-xs font-black uppercase rounded ${classGroup === 'UPPER_PRIMARY' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}
+                  >
+                    ६ ते ८ (Upper)
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center gap-2">

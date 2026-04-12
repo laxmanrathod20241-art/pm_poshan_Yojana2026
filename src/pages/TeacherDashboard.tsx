@@ -35,6 +35,10 @@ export default function TeacherDashboard() {
   const [enrollment, setEnrollment] = useState({ primary: 0, upper: 0 });
   const [foodGramsMap, setFoodGramsMap] = useState<Record<string, {primary: number, upper: number}>>({});
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
+  
+  // Section Configuration
+  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -59,7 +63,8 @@ export default function TeacherDashboard() {
       fetchInventory(),
       fetchTodayMenu(),
       fetchEnrollment(),
-      fetchMenuGrams()
+      fetchMenuGrams(),
+      fetchConfiguration()
     ]);
     setCalendarLoading(false);
   };
@@ -143,6 +148,22 @@ export default function TeacherDashboard() {
     } catch (err) { console.error(err); }
   };
 
+  const fetchConfiguration = async () => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('has_primary, has_upper_primary')
+        .eq('id', userId!)
+        .single();
+      
+      const config = data as any;
+      if (config) {
+        setHasPrimary(config.has_primary ?? true);
+        setHasUpperPrimary(config.has_upper_primary ?? true);
+      }
+    } catch (err) { console.error(err); }
+  };
+
   const fetchTodayMenu = async () => {
     try {
       const now = new Date();
@@ -176,11 +197,14 @@ export default function TeacherDashboard() {
   const criticalItems = useMemo(() => {
     return inventoryItems.filter((item: any) => {
       const grams = foodGramsMap[item.item_name] || { primary: 100, upper: 150 };
-      const dailyRequirement = (enrollment.primary * grams.primary + enrollment.upper * grams.upper) / 1000;
+      const dailyRequirement = (
+        (hasPrimary ? enrollment.primary : 0) * grams.primary + 
+        (hasUpperPrimary ? enrollment.upper : 0) * grams.upper
+      ) / 1000;
       const daysRemaining = dailyRequirement > 0 ? (Number(item.current_balance) / dailyRequirement) : Infinity;
       return daysRemaining <= 10; // Items with < 10 days remaining are "Alert" items
     });
-  }, [inventoryItems, enrollment, foodGramsMap]);
+  }, [inventoryItems, enrollment, foodGramsMap, hasPrimary, hasUpperPrimary]);
 
   return (
     <Layout>
@@ -255,7 +279,10 @@ export default function TeacherDashboard() {
                     {inventoryItems.map((item: any) => {
                       const balance = Number(item.current_balance);
                       const grams = foodGramsMap[item.item_name] || { primary: 100, upper: 150 };
-                      const dailyRequirement = (enrollment.primary * grams.primary + enrollment.upper * grams.upper) / 1000;
+                      const dailyRequirement = (
+                        (hasPrimary ? enrollment.primary : 0) * grams.primary + 
+                        (hasUpperPrimary ? enrollment.upper : 0) * grams.upper
+                      ) / 1000;
                       const daysRemaining = dailyRequirement > 0 ? (balance / dailyRequirement) : Infinity;
 
                       let colorClasses = "bg-white border-slate-200 text-slate-800";

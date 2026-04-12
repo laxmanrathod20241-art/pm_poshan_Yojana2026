@@ -190,15 +190,17 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
                       Credit Ledger (उसणे धान्य)
                     </Link>
                   </div>
-                  <div>
-                    <Link
-                      to="/daily-log"
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className="block p-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-700 text-white text-[11px] font-black uppercase tracking-widest text-center mt-6 shadow-xl hover:shadow-blue-200 transition-all active:scale-95"
-                    >
-                      Consumption Log
-                    </Link>
-                  </div>
+                  {/* Hiding the Consumption Log button per user request - Set to 'true' to restore */}
+                  {false && (
+                    <div className="mt-auto px-4 pb-6">
+                      <button 
+                        onClick={() => navigate('/daily-log')}
+                        className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+                      >
+                        CONSUMPTION LOG
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -217,19 +219,19 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:px-8 md:py-6 relative">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:px-8 md:py-6 relative flex flex-col">
             {children}
+            {!hideFooter && (
+              <footer className="mt-auto py-3 text-center text-[10px] text-slate-500 border-t border-slate-100 print:hidden">
+                © {new Date().getFullYear()} PM-POSHAN Tracker - Independent Standalone Project.
+              </footer>
+            )}
           </div>
         </main>
 
       </div>
 
-      {/* Footer */}
-      {!hideFooter && (
-        <footer className="w-full bg-slate-950 text-slate-400 py-4 text-center text-xs font-medium tracking-wide z-20 border-t border-slate-900 print:hidden">
-          © {new Date().getFullYear()} PM-POSHAN Tracker - Independent Standalone Project.
-        </footer>
-      )}
+
       
     </div>
   );

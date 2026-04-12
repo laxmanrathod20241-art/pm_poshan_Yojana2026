@@ -40,6 +40,10 @@ export default function TeacherMenuMaster() {
   const [gramsUpperPrimary, setGramsUpperPrimary] = useState<number | ''>('');
   const [loading, setLoading] = useState(false);
 
+  // Section Configuration
+  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
+
   // Add Custom Food (local_food_master) modal state
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customFoodCode, setCustomFoodCode] = useState('');
@@ -66,6 +70,7 @@ export default function TeacherMenuMaster() {
     if (userId) {
       fetchFoodOptions();
       fetchMenu();
+      fetchConfiguration();
     }
   }, [userId]);
 
@@ -122,6 +127,22 @@ export default function TeacherMenuMaster() {
       setFetchLoading(false);
     }
   };
+  
+  const fetchConfiguration = async () => {
+    if (!userId) return;
+    try {
+      const { data } = await (supabase as any)
+        .from('profiles')
+        .select('has_primary, has_upper_primary')
+        .eq('id', userId)
+        .single();
+      
+      if (data) {
+        setHasPrimary(data.has_primary ?? true);
+        setHasUpperPrimary(data.has_upper_primary ?? true);
+      }
+    } catch (err) { console.error(err); }
+  };
 
   // ── Validation logic for custom food ──────────────────────────────
   const handleValidateCustom = () => {
@@ -169,8 +190,13 @@ export default function TeacherMenuMaster() {
   // ── Add item to menu_master ──────────────────────────────────────
   const addItem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId || !selectedCode || gramsPrimary === '' || gramsUpperPrimary === '') {
-      setMessage({ type: 'error', text: 'कृपया सर्व माहिती भरा (Quantity for both sections).' });
+    
+    // Validate only enabled sections
+    const pVal = hasPrimary ? gramsPrimary : 0;
+    const uVal = hasUpperPrimary ? gramsUpperPrimary : 0;
+
+    if (!userId || !selectedCode || (hasPrimary && gramsPrimary === '') || (hasUpperPrimary && gramsUpperPrimary === '')) {
+      setMessage({ type: 'error', text: 'कृपया सर्व माहिती भरा.' });
       return;
     }
 
@@ -184,8 +210,8 @@ export default function TeacherMenuMaster() {
         teacher_id: userId,
         item_name: selectedFood.name,
         item_code: selectedCode,
-        grams_primary: Number(gramsPrimary) * 1000,
-        grams_upper_primary: Number(gramsUpperPrimary) * 1000,
+        grams_primary: Number(pVal) * 1000,
+        grams_upper_primary: Number(uVal) * 1000,
         source: selectedFood.type,
         item_category: selectedFood.item_category
       });
@@ -333,29 +359,33 @@ export default function TeacherMenuMaster() {
                 </div>
               </div>
 
-              <div className="w-full md:w-64 grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
-                    Std 1-5 (KG)
-                  </label>
-                  <input
-                    type="number" required min="0" step="0.00001" value={gramsPrimary}
-                    onChange={e => setGramsPrimary(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 p-2.5 text-sm font-black text-slate-700 focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] rounded-none shadow-sm bg-slate-50/30"
-                    placeholder="0.00500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
-                    Std 6-8 (KG)
-                  </label>
-                  <input
-                    type="number" required min="0" step="0.00001" value={gramsUpperPrimary}
-                    onChange={e => setGramsUpperPrimary(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 p-2.5 text-sm font-black text-slate-700 focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] rounded-none shadow-sm bg-slate-50/30"
-                    placeholder="0.01000"
-                  />
-                </div>
+              <div className={`w-full md:w-64 grid ${hasPrimary && hasUpperPrimary ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
+                {hasPrimary && (
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
+                      Std 1-5 (KG)
+                    </label>
+                    <input
+                      type="number" required min="0" step="0.00001" value={gramsPrimary}
+                      onChange={e => setGramsPrimary(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full border border-slate-300 p-2.5 text-sm font-black text-slate-700 focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] rounded-none shadow-sm bg-slate-50/30"
+                      placeholder="0.00500"
+                    />
+                  </div>
+                )}
+                {hasUpperPrimary && (
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
+                      Std 6-8 (KG)
+                    </label>
+                    <input
+                      type="number" required min="0" step="0.00001" value={gramsUpperPrimary}
+                      onChange={e => setGramsUpperPrimary(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full border border-slate-300 p-2.5 text-sm font-black text-slate-700 focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] rounded-none shadow-sm bg-slate-50/30"
+                      placeholder="0.01000"
+                    />
+                  </div>
+                )}
               </div>
 
               <button
@@ -458,99 +488,99 @@ export default function TeacherMenuMaster() {
           )}
         </div>
 
-        {/* ── Table 1: Main Foods ────────────────────────────────────── */}
-        <div className="bg-white border border-slate-300 shadow-sm overflow-hidden mb-10">
-          <div className="bg-[#474379] p-4 flex justify-between items-center text-white text-sm font-bold uppercase tracking-wide">
-             Main Foods (मुख्य अन्न)
-             <span className="text-[10px] bg-white/20 px-2 py-1 rounded">{mainFoods.length} Items</span>
+        {/* ── Side-by-Side Tables Grid ─────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start mb-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          
+          {/* Table 1: Main Foods */}
+          <div className="bg-white border border-slate-200 shadow-sm overflow-hidden rounded-lg">
+            <div className="bg-[#474379] p-3 flex justify-between items-center text-white text-[12px] font-bold uppercase tracking-wider">
+               <span>Main Foods (मुख्य अन्न)</span>
+               <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full">{mainFoods.length} Items</span>
+            </div>
+            <div className="overflow-x-auto w-full">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-left w-1/2 tracking-tighter">आयटम (Food Item)</th>
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-center w-20 tracking-tighter">स्त्रोत</th>
+                    {hasPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-right w-24 tracking-tighter leading-none">१ ली - ५ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
+                    {hasUpperPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-right w-24 tracking-tighter leading-none">६ वी - ८ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-center w-12 tracking-tighter"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {fetchLoading ? (
+                    <tr><td colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)} className="p-8 text-center text-slate-400 text-xs italic">लोड होत आहे...</td></tr>
+                  ) : mainFoods.length === 0 ? (
+                    <tr><td colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)} className="p-8 text-center text-slate-400 text-xs italic">अजून कोणतेही मुख्य अन्न जोडले नाही.</td></tr>
+                  ) : (
+                    mainFoods.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
+                        <td className="py-2 px-3">
+                          <span className="text-[13px] font-bold text-slate-700">{item.item_name}</span>
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-sm ${item.source==='global'?'bg-indigo-50 text-indigo-700 border border-indigo-100':'bg-orange-50 text-orange-700 border border-orange-100'}`}>
+                            {item.source==='global'?'Govt':'Local'}
+                          </span>
+                        </td>
+                        {hasPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_primary / 1000).toFixed(5)}</td>}
+                        {hasUpperPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_upper_primary / 1000).toFixed(5)}</td>}
+                        <td className="py-2 px-3 text-center">
+                          <button onClick={()=>deleteItem(item.id)} title="काढून टाका (Delete Item)" className="text-slate-300 hover:text-red-500 p-1 transition-colors"><Trash2 size={14} /></button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-300">
-                  <th className="p-4 text-[10px] font-black text-[#474379] uppercase text-left w-1/2 tracking-tighter">आयटम (Food Item)</th>
-                  <th className="p-4 text-[10px] font-black text-[#474379] uppercase text-center w-24 tracking-tighter">स्त्रोत</th>
-                  <th className="p-4 text-[10px] font-black text-[#474379] uppercase text-right w-28 tracking-tighter leading-tight">१ ली - ५ वी <br/> (KG)</th>
-                  <th className="p-4 text-[10px] font-black text-[#474379] uppercase text-right w-28 tracking-tighter leading-tight">६ वी - ८ वी <br/> (KG)</th>
-                  <th className="p-4 text-[10px] font-black text-[#474379] uppercase text-center w-20 tracking-tighter">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fetchLoading ? (
-                  <tr><td colSpan={5} className="p-8 text-center text-slate-400 font-bold">लोड होत आहे...</td></tr>
-                ) : mainFoods.length === 0 ? (
-                  <tr><td colSpan={5} className="p-8 text-center text-slate-400 font-bold italic">अजून कोणतेही मुख्य अन्न जोडले नाही.</td></tr>
-                ) : (
-                  mainFoods.map((item, idx) => (
-                    <tr key={item.id} className={`border-b border-slate-200 hover:bg-slate-50 transition-colors ${idx%2===0?'bg-white':'bg-slate-50/40'}`}>
-                      <td className="p-4">
-                        <div className="flex flex-col gap-1">
-                          <span className="text-[13px] font-bold text-slate-800">{item.item_name}</span>
-                        </div>
-                      </td>
-                      <td className="p-4 text-center">
-                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${item.source==='global'?'bg-indigo-50 text-indigo-700 border border-indigo-100':'bg-orange-50 text-orange-700 border border-orange-100'}`}>
-                          {item.source==='global'?'🏛 Govt':'📌 Local'}
-                        </span>
-                      </td>
-                      <td className="p-4 text-[12px] font-black text-slate-600 text-right">{(item.grams_primary / 1000).toFixed(5)} kg</td>
-                      <td className="p-4 text-[12px] font-black text-slate-600 text-right">{(item.grams_upper_primary / 1000).toFixed(5)} kg</td>
-                      <td className="p-4 text-center">
-                        <button title="आहार हटवा (Delete Food Item)" onClick={()=>deleteItem(item.id)} className="text-red-500 hover:text-red-700 p-2"><Trash2 size={15} /></button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
 
-        {/* ── Table 2: Ingredients ────────────────────────────────────── */}
-        <div className="bg-white border border-slate-300 shadow-sm overflow-hidden mb-20">
-          <div className="bg-[#3c8dbc] p-4 flex justify-between items-center text-white text-sm font-bold uppercase tracking-wide">
-             Ingredients (साहित्य)
-             <span className="text-[10px] bg-white/20 px-2 py-1 rounded">{ingredients.length} Items</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-300">
-                  <th className="p-4 text-[10px] font-black text-[#3c8dbc] uppercase text-left w-1/2 tracking-tighter">साहित्य (Ingredient)</th>
-                  <th className="p-4 text-[10px] font-black text-[#3c8dbc] uppercase text-center w-24 tracking-tighter">स्त्रोत</th>
-                  <th className="p-4 text-[10px] font-black text-[#3c8dbc] uppercase text-right w-28 tracking-tighter leading-tight">१ ली - ५ वी <br/> (KG)</th>
-                  <th className="p-4 text-[10px] font-black text-[#3c8dbc] uppercase text-right w-28 tracking-tighter leading-tight">६ वी - ८ वी <br/> (KG)</th>
-                  <th className="p-4 text-[10px] font-black text-[#3c8dbc] uppercase text-center w-20 tracking-tighter">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fetchLoading ? (
-                  <tr><td colSpan={5} className="p-8 text-center text-slate-400 font-bold">लोड होत आहे...</td></tr>
-                ) : ingredients.length === 0 ? (
-                  <tr><td colSpan={5} className="p-8 text-center text-slate-400 font-bold italic">अजून कोणतेही साहित्य जोडले नाही.</td></tr>
-                ) : (
-                  ingredients.map((item, idx) => (
-                    <tr key={item.id} className={`border-b border-slate-200 hover:bg-slate-50 transition-colors ${idx%2===0?'bg-white':'bg-slate-50/40'}`}>
-                      <td className="p-4">
-                        <div className="flex flex-col gap-1">
-                          <span className="text-[13px] font-bold text-slate-800">{item.item_name}</span>
-                        </div>
-                      </td>
-                      <td className="p-4 text-center">
-                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${item.source==='global'?'bg-indigo-50 text-indigo-700 border border-indigo-100':'bg-orange-50 text-orange-700 border border-orange-100'}`}>
-                          {item.source==='global'?'🏛 Govt':'📌 Local'}
-                        </span>
-                      </td>
-                      <td className="p-4 text-[12px] font-black text-slate-600 text-right">{(item.grams_primary / 1000).toFixed(5)} kg</td>
-                      <td className="p-4 text-[12px] font-black text-slate-600 text-right">{(item.grams_upper_primary / 1000).toFixed(5)} kg</td>
-                      <td className="p-4 text-center">
-                        <button title="साहित्य हटवा (Delete Ingredient)" onClick={()=>deleteItem(item.id)} className="text-red-500 hover:text-red-700 p-2"><Trash2 size={15} /></button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          {/* Table 2: Ingredients */}
+          <div className="bg-white border border-slate-200 shadow-sm overflow-hidden rounded-lg">
+            <div className="bg-[#3c8dbc] p-3 flex justify-between items-center text-white text-[12px] font-bold uppercase tracking-wider">
+               <span>Ingredients (साहित्य)</span>
+               <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full">{ingredients.length} Items</span>
+            </div>
+            <div className="overflow-x-auto w-full">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-left w-1/2 tracking-tighter">साहित्य (Ingredient)</th>
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-center w-20 tracking-tighter">स्त्रोत</th>
+                    {hasPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-right w-24 tracking-tighter leading-none">१ ली - ५ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
+                    {hasUpperPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-right w-24 tracking-tighter leading-none">६ वी - ८ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-center w-12 tracking-tighter"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {fetchLoading ? (
+                    <tr><td colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)} className="p-8 text-center text-slate-400 text-xs italic">लोड होत आहे...</td></tr>
+                  ) : ingredients.length === 0 ? (
+                    <tr><td colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)} className="p-8 text-center text-slate-400 text-xs italic">अजून कोणतेही साहित्य जोडले नाही.</td></tr>
+                  ) : (
+                    ingredients.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
+                        <td className="py-2 px-3">
+                          <span className="text-[13px] font-bold text-slate-700">{item.item_name}</span>
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-sm ${item.source==='global'?'bg-indigo-50 text-indigo-700 border border-indigo-100':'bg-orange-50 text-orange-700 border border-orange-100'}`}>
+                            {item.source==='global'?'Govt':'Local'}
+                          </span>
+                        </td>
+                        {hasPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_primary / 1000).toFixed(5)}</td>}
+                        {hasUpperPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_upper_primary / 1000).toFixed(5)}</td>}
+                        <td className="py-2 px-3 text-center">
+                          <button onClick={()=>deleteItem(item.id)} title="काढून टाका (Delete Item)" className="text-slate-300 hover:text-red-500 p-1 transition-colors"><Trash2 size={14} /></button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
