@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout';
-import { Loader2, Save, Printer, RefreshCw } from 'lucide-react';
+import { Loader2, Save, Printer, RefreshCw, FileText } from 'lucide-react';
 import { useReactToPrint } from 'react-to-print';
 
 interface MenuItem {
