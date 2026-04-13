@@ -145,6 +145,7 @@ export interface Database {
           quantity_kg: number
           receipt_date: string
           bill_no: string | null
+          standard_group: string | null
           created_at: string
         }
         Insert: {
@@ -154,6 +155,7 @@ export interface Database {
           quantity_kg: number
           receipt_date: string
           bill_no?: string | null
+          standard_group?: string | null
           created_at?: string
         }
         Update: {
@@ -163,6 +165,7 @@ export interface Database {
           quantity_kg?: number
           receipt_date?: string
           bill_no?: string | null
+          standard_group?: string | null
           created_at?: string
         }
       }
@@ -173,6 +176,7 @@ export interface Database {
           item_name: string
           item_code: string | null
           current_balance: number
+          standard_group: string | null
           created_at: string | null
         }
         Insert: {
@@ -181,6 +185,7 @@ export interface Database {
           item_name: string
           item_code?: string | null
           current_balance: number
+          standard_group?: string | null
           created_at?: string | null
         }
         Update: {
@@ -189,6 +194,7 @@ export interface Database {
           item_name?: string
           item_code?: string | null
           current_balance?: number
+          standard_group?: string | null
           created_at?: string | null
         }
       }
@@ -203,7 +209,9 @@ export interface Database {
           main_foods_all: string[] | null
           ingredients_used: string[] | null
           is_overridden: boolean | null
+          standard_group: string | null
           original_template: Json | null
+          borrowed_items: Json | null
           created_at: string
         }
         Insert: {
@@ -216,7 +224,9 @@ export interface Database {
           main_foods_all?: string[] | null
           ingredients_used?: string[] | null
           is_overridden?: boolean | null
+          standard_group?: string | null
           original_template?: Json | null
+          borrowed_items?: Json | null
           created_at?: string
         }
         Update: {
@@ -229,7 +239,9 @@ export interface Database {
           main_foods_all?: string[] | null
           ingredients_used?: string[] | null
           is_overridden?: boolean | null
+          standard_group?: string | null
           original_template?: Json | null
+          borrowed_items?: Json | null
           created_at?: string
         }
       }
@@ -240,6 +252,8 @@ export interface Database {
           report_month: number
           report_year: number
           report_data: Json | null
+          standard_group: string | null
+          daily_ledger_data: Json | null
           created_at: string
         }
         Insert: {
@@ -248,6 +262,8 @@ export interface Database {
           report_month: number
           report_year: number
           report_data?: Json | null
+          standard_group?: string | null
+          daily_ledger_data?: Json | null
           created_at?: string
         }
         Update: {
@@ -256,6 +272,8 @@ export interface Database {
           report_month?: number
           report_year?: number
           report_data?: Json | null
+          standard_group?: string | null
+          daily_ledger_data?: Json | null
           created_at?: string
         }
       }
@@ -317,9 +335,13 @@ export interface Database {
           teacher_id: string
           staff_name: string
           post_name: string
+          payment_type: string
+          rate_primary: number
+          rate_upper: number
           monthly_cost: number
           record_month: number
           record_year: number
+          standard_group: string | null
           created_at: string
         }
         Insert: {
@@ -327,9 +349,13 @@ export interface Database {
           teacher_id: string
           staff_name: string
           post_name: string
+          payment_type?: string
+          rate_primary?: number
+          rate_upper?: number
           monthly_cost: number
           record_month: number
           record_year: number
+          standard_group?: string | null
           created_at?: string
         }
         Update: {
@@ -337,9 +363,13 @@ export interface Database {
           teacher_id?: string
           staff_name?: string
           post_name?: string
+          payment_type?: string
+          rate_primary?: number
+          rate_upper?: number
           monthly_cost?: number
           record_month?: number
           record_year?: number
+          standard_group?: string | null
           created_at?: string
         }
       }
@@ -348,27 +378,42 @@ export interface Database {
           id: string
           teacher_id: string
           fuel_type: string
+          fuel_rate_primary: number
+          fuel_rate_upper: number
+          veg_rate_primary: number
+          veg_rate_upper: number
           monthly_cost: number
           record_month: number
           record_year: number
+          standard_group: string | null
           created_at: string
         }
         Insert: {
           id?: string
           teacher_id: string
           fuel_type: string
+          fuel_rate_primary?: number
+          fuel_rate_upper?: number
+          veg_rate_primary?: number
+          veg_rate_upper?: number
           monthly_cost: number
           record_month: number
           record_year: number
+          standard_group?: string | null
           created_at?: string
         }
         Update: {
           id?: string
           teacher_id?: string
           fuel_type?: string
+          fuel_rate_primary?: number
+          fuel_rate_upper?: number
+          veg_rate_primary?: number
+          veg_rate_upper?: number
           monthly_cost?: number
           record_month?: number
           record_year?: number
+          standard_group?: string | null
           created_at?: string
         }
       }
@@ -472,6 +517,70 @@ export interface Database {
           description?: string | null
           is_active_for_teachers?: boolean
           created_at?: string | null
+        }
+      }
+      item_ledger_reports: {
+        Row: {
+          id: string
+          teacher_id: string
+          item_name: string
+          date_range: string
+          standard_group: string | null
+          report_data: Json | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          teacher_id: string
+          item_name: string
+          date_range: string
+          standard_group?: string | null
+          report_data?: Json | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          teacher_id?: string
+          item_name?: string
+          date_range?: string
+          standard_group?: string | null
+          report_data?: Json | null
+          created_at?: string
+        }
+      }
+      demand_reports: {
+        Row: {
+          id: string
+          teacher_id: string
+          report_period: string
+          class_group: string
+          working_days: number
+          enrollment_count: number
+          report_data: Json
+          standard_group: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          teacher_id: string
+          report_period: string
+          class_group: string
+          working_days: number
+          enrollment_count: number
+          report_data: Json
+          standard_group?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          teacher_id?: string
+          report_period?: string
+          class_group?: string
+          working_days?: number
+          enrollment_count?: number
+          report_data?: Json
+          standard_group?: string | null
+          created_at?: string
         }
       }
     }

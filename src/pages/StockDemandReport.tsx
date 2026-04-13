@@ -1,9 +1,13 @@
-// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout';
 import { reconstructOpeningBalances } from '../utils/inventoryUtils';
-import { Loader2, BarChart2, Printer } from 'lucide-react';
+import { Loader2, BarChart2, Printer, AlertCircle } from 'lucide-react';
+import type { Database } from '../types/database.types';
+
+type Profile = Database['public']['Tables']['profiles']['Row'];
+type MenuItem = Database['public']['Tables']['menu_master']['Row'];
+type Enrollment = Database['public']['Tables']['student_enrollment']['Row'];
 
 export default function StockDemandReport() {
 
@@ -30,7 +34,7 @@ export default function StockDemandReport() {
   const [hasPrimary, setHasPrimary] = useState<boolean>(true);
   const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
 
-  const [menuItems, setMenuItems] = useState<any[]>([]);
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [inventoryBalances, setInventoryBalances] = useState<Record<string, number>>({});
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -70,10 +74,11 @@ export default function StockDemandReport() {
       const fromMonthIndex = marathiMonths.indexOf(fromMonth);
       const cutoffDate = `${fromYear}-${String(fromMonthIndex + 1).padStart(2, '0')}-01`;
 
-      const { data: profile } = await (supabase as any)
+      const { data: profile } = await supabase
         .from('profiles')
         .select('school_name_mr, center_name_mr, has_primary, has_upper_primary')
         .eq('id', id)
+        .returns<Profile[]>()
         .single();
 
       if (profile) {
@@ -90,10 +95,11 @@ export default function StockDemandReport() {
         if (hp && !hup) setClassGroup('PRIMARY');
       }
 
-      const { data: enrollment } = await (supabase as any)
+      const { data: enrollment } = await supabase
         .from('student_enrollment')
         .select('*')
         .eq('teacher_id', id)
+        .returns<Enrollment[]>()
         .maybeSingle();
 
       if (enrollment) {
@@ -105,7 +111,7 @@ export default function StockDemandReport() {
         setEnrollmentCount(0);
       }
 
-      const { data: menu } = await (supabase as any)
+      const { data: menu } = await supabase
         .from('menu_master')
         .select('*')
         .eq('teacher_id', id);
@@ -113,8 +119,8 @@ export default function StockDemandReport() {
       const items = menu || [];
       setMenuItems(items);
 
-      // Reconstruct historical balances using centralized utility
-      const reconcilation = await reconstructOpeningBalances(id, cutoffDate, items);
+      // Reconstruct historical balances using centralized utility with SCOPE
+      const reconcilation = await reconstructOpeningBalances(id, cutoffDate, items, classGroup.toLowerCase() as any);
       setInventoryBalances(reconcilation);
 
     } catch (error) {
@@ -140,8 +146,9 @@ export default function StockDemandReport() {
           class_group: classGroup,
           working_days: workingDays,
           enrollment_count: enrollmentCount,
+          standard_group: classGroup.toLowerCase(),
           report_data: customDemands
-        }]);
+        }] as any);
 
       if (error) throw error;
       setIsSaved(true);
@@ -211,24 +218,22 @@ export default function StockDemandReport() {
         <div className="mb-6 p-5 bg-white rounded-xl shadow-xl border border-slate-200 print:hidden flex flex-col md:flex-row gap-5 justify-between items-start md:items-center">
           <div className="flex-1 space-y-4">
             <div className="flex flex-wrap gap-4">
-              <div className="flex bg-slate-100 p-1 rounded-lg">
-                {hasPrimary && (
+              {hasPrimary && hasUpperPrimary && (
+                <div className="flex bg-slate-100 p-1 rounded-lg">
                   <button
                     onClick={() => setClassGroup('PRIMARY')}
                     className={`px-4 py-2 text-xs font-black uppercase rounded ${classGroup === 'PRIMARY' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}
                   >
                     १ ते ५ (Primary)
                   </button>
-                )}
-                {hasUpperPrimary && (
                   <button
                     onClick={() => setClassGroup('UPPER_PRIMARY')}
                     className={`px-4 py-2 text-xs font-black uppercase rounded ${classGroup === 'UPPER_PRIMARY' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}
                   >
                     ६ ते ८ (Upper)
                   </button>
-                )}
-              </div>
+                </div>
+              )}
 
               <div className="flex items-center gap-2">
                 <label className="text-xs font-black text-slate-500 uppercase">Working Days:</label>
@@ -260,6 +265,17 @@ export default function StockDemandReport() {
                 </select>
               </div>
             </div>
+
+            {/* Enrollment Alert for empty groups */}
+            {enrollmentCount === 0 && !loading && (
+              <div className="mt-4 flex items-center gap-3 bg-amber-50 border border-amber-200 p-4 rounded-xl text-amber-800 animate-pulse">
+                <AlertCircle className="flex-shrink-0" size={24} />
+                <div>
+                  <p className="text-xs font-black uppercase tracking-widest">Enrollment Missing!</p>
+                  <p className="text-[11px] font-bold">Please enter student counts for {classGroup === 'PRIMARY' ? 'Standard 1-5' : 'Standard 6-8'} in the Enrollment Registry to generate this report.</p>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-3 items-end">
@@ -267,24 +283,24 @@ export default function StockDemandReport() {
               <button
                 onClick={handleSave}
                 disabled={loading}
-                className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-black uppercase tracking-widest flex items-center gap-2 shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
+                className={`flex-shrink-0 text-white px-6 py-2.5 rounded-lg font-black uppercase text-xs tracking-widest flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-50 ${isSaved ? 'bg-green-600 hover:bg-green-700 shadow-green-100' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-100'}`}
               >
-                {loading ? <Loader2 className="animate-spin" size={20} /> : <BarChart2 size={20} />}
-                Save Demand Report
+                {loading ? <Loader2 className="animate-spin" size={16} /> : <BarChart2 size={16} />}
+                {isSaved ? '✔ SAVED' : 'SAVE DEMAND REPORT'}
               </button>
             ) : (
               <div className="flex gap-3">
                 <button
                   onClick={handleEdit}
-                  className="flex-shrink-0 bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-4 rounded-xl font-black uppercase tracking-widest flex items-center gap-2 transition-transform hover:scale-105"
+                  className="flex-shrink-0 bg-slate-200 hover:bg-slate-300 text-slate-700 px-5 py-2.5 rounded-lg font-black uppercase text-xs tracking-widest flex items-center gap-2 transition-all active:scale-95"
                 >
                   Edit Report
                 </button>
                 <button
                   onClick={handlePrint}
-                  className="flex-shrink-0 bg-slate-900 hover:bg-slate-800 text-white px-8 py-4 rounded-xl font-black uppercase tracking-widest flex items-center gap-2 shadow-lg transition-transform hover:scale-105"
+                  className="flex-shrink-0 bg-slate-900 hover:bg-slate-800 text-white px-6 py-2.5 rounded-lg font-black uppercase text-xs tracking-widest flex items-center gap-2 shadow-lg transition-all active:scale-95"
                 >
-                  <Printer size={20} /> Print Report
+                  <Printer size={16} /> Print Report
                 </button>
               </div>
             )}
@@ -300,43 +316,43 @@ export default function StockDemandReport() {
             <Loader2 className="animate-spin text-blue-600" size={40} />
           </div>
         ) : (
-          <div id="printable-report" className="bg-white p-8 md:p-12 border border-slate-200 shadow-sm print:shadow-none print:border-none print:p-0 font-['Inter'] w-full print:w-full print:max-w-none print:px-0 print:mx-0">
-            <div className="text-center mb-8">
+          <div id="printable-report" className="bg-white p-6 md:p-8 print:p-2 font-['Inter'] w-full print:w-full print:max-w-none print:px-0 print:mx-0">
+            <div className="text-center mb-6 print:mb-2">
               <h1 className="text-2xl font-black text-black underline decoration-2 underline-offset-4 mb-2">
-                शालेय पोषण आहार मागणी (इयत्ता {classGroup === 'PRIMARY' ? '१ ते ५' : '६ ते ८'} )
+                शालेय पोषण आहार मागणी पत्रक {classGroup === 'PRIMARY' ? '(इ. १ ते ५ वी)' : '(इ. ६ ते ८ वी)'}
               </h1>
               <h2 className="text-lg font-bold text-black">
                 माहे : {reportPeriod || '______________________'}
               </h2>
             </div>
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-0 border-2 border-black mb-8 w-full print:w-full [&>div]:border-black [&>div]:border-r [&>div]:border-b last:[&>div]:border-r-0 lg:[&>div:nth-child(4n)]:border-r-0 [&>div:nth-last-child(-n+4)]:border-b-0 print:border-[1.5px] print:[&>div]:border-b-[1.5px] print:[&>div]:border-r-[1.5px]">
-              <div className="p-3">
-                <div className="text-xs font-bold text-gray-600 print:text-black">शाळेचे नाव</div>
-                <div className="font-bold text-base">{schoolName || '-'}</div>
+            <div className="grid grid-cols-1 md:grid-cols-12 print:grid-cols-12 gap-0 border-2 border-black mb-4 print:mb-2 w-full print:w-full divide-y md:divide-y-0 md:divide-x print:divide-y-0 print:divide-x border-black">
+              <div className="p-3 md:col-span-6 print:col-span-6">
+                <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest print:text-black font-['Inter']">शाळेचे नाव</div>
+                <div className="font-bold text-sm uppercase">{schoolName || '-'}</div>
               </div>
-              <div className="p-3">
-                <div className="text-xs font-bold text-gray-600 print:text-black">केंद्राचे नाव</div>
-                <div className="font-bold text-base">{centerName || '-'}</div>
+              <div className="p-3 md:col-span-2 print:col-span-2">
+                <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest print:text-black font-['Inter']">केंद्राचे नाव</div>
+                <div className="font-bold text-sm uppercase">{centerName || '-'}</div>
               </div>
-              <div className="p-3">
-                <div className="text-xs font-bold text-gray-600 print:text-black">पट</div>
-                <div className="font-bold text-base">{enrollmentCount}</div>
+              <div className="p-3 md:col-span-2 print:col-span-2">
+                <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest print:text-black font-['Inter']">पट</div>
+                <div className="font-bold text-sm">{enrollmentCount}</div>
               </div>
-              <div className="p-3 border-r-0">
-                <div className="text-xs font-bold text-gray-600 print:text-black">कामाचे एकूण दिवस</div>
-                <div className="font-bold text-base">{workingDays}</div>
+              <div className="p-3 md:col-span-2 print:col-span-2">
+                <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest print:text-black font-['Inter']">कामाचे एकूण दिवस</div>
+                <div className="font-bold text-sm">{workingDays}</div>
               </div>
             </div>
 
             <table className="w-full print:w-full border-collapse border-2 border-black print:border-black text-base">
               <thead>
-                <tr className="bg-gray-100 print:bg-transparent">
-                  <th className="border border-black print:border-black print:text-black w-12 p-2 py-3 text-center">अ. क्र.</th>
-                  <th className="border border-black print:border-black print:text-black w-[35%] p-2 py-3 text-left">धान्यादी माल</th>
-                  <th className="border border-black print:border-black print:text-black w-[18%] p-2 py-3 text-right">मागील माह अखेर शिल्लक</th>
-                  <th className="border border-black print:border-black print:text-black w-[18%] p-2 py-3 text-right">पटानुसार आवश्यक माल</th>
-                  <th className="border border-black print:border-black print:text-black w-[17%] p-2 py-3 text-right text-lg">निव्वळ मागणी</th>
+                <tr className="bg-slate-50 print:bg-gray-100">
+                  <th className="border border-black print:border-black print:text-black w-12 p-2 py-3 print:py-1 text-center">अ. क्र.</th>
+                  <th className="border border-black print:border-black print:text-black w-[35%] p-2 py-3 print:py-1 text-left">धान्यादी माल</th>
+                  <th className="border border-black print:border-black print:text-black w-[18%] p-2 py-3 print:py-1 text-right">मागील माह अखेर शिल्लक</th>
+                  <th className="border border-black print:border-black print:text-black w-[18%] p-2 py-3 print:py-1 text-right">पटानुसार आवश्यक माल</th>
+                  <th className="border border-black print:border-black print:text-black w-[17%] p-2 py-3 print:py-1 text-right text-lg print:text-base">निव्वळ मागणी</th>
                 </tr>
               </thead>
               <tbody>
@@ -347,11 +363,11 @@ export default function StockDemandReport() {
 
                   return (
                     <tr key={item.id}>
-                      <td className="border border-black print:border-black print:text-black p-2 text-center font-normal">{idx + 1}</td>
-                      <td className="border border-black print:border-black print:text-black p-2 font-medium">{item.item_name}</td>
-                      <td className="border border-black print:border-black print:text-black p-2 text-right font-normal">{balance.toFixed(3)}</td>
-                      <td className="border border-black print:border-black print:text-black p-2 text-right font-normal">{required.toFixed(3)}</td>
-                      <td className="border border-black print:border-black print:text-black p-2 text-right font-bold text-lg bg-gray-50 print:bg-transparent">
+                      <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-center font-normal">{idx + 1}</td>
+                      <td className="border border-black print:border-black print:text-black p-2 print:py-1 font-medium">{item.item_name}</td>
+                      <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-right font-normal">{balance.toFixed(3)}</td>
+                      <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-right font-normal">{required.toFixed(3)}</td>
+                      <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-right font-bold text-lg print:text-base bg-gray-50 print:bg-transparent">
                         {!isSaved ? (
                           <input
                             type="number"
@@ -377,7 +393,7 @@ export default function StockDemandReport() {
               </tbody>
             </table>
 
-            <div className="flex justify-between w-full mt-24 print:mt-32 px-10 print:px-4 text-sm font-bold text-black print:text-black">
+            <div className="flex justify-between w-full mt-10 print:mt-14 px-10 print:px-4 text-sm font-bold text-black print:text-black">
               <div className="text-center">
                 <div className="border-t-2 border-black w-48 mx-auto mb-2"></div>
                 <p>शालेय पोषण आहार प्रभारी</p>

@@ -18,8 +18,11 @@ export const calculateConsumedKg = (
   primaryCount: number,
   upperCount: number,
   gramsPrimary: number,
-  gramsUpper: number
+  gramsUpper: number,
+  scope?: 'primary' | 'upper_primary'
 ): number => {
+  if (scope === 'primary') return (primaryCount * gramsPrimary) / 1000;
+  if (scope === 'upper_primary') return (upperCount * (gramsUpper || 0)) / 1000;
   const totalGrams = (primaryCount * gramsPrimary) + (upperCount * (gramsUpper || 0));
   return totalGrams / 1000;
 };
@@ -31,7 +34,8 @@ export const calculateConsumedKg = (
 export const reconstructOpeningBalances = async (
   teacherId: string,
   cutoffDate: string,
-  items: MenuItemSnippet[]
+  items: MenuItemSnippet[],
+  standardGroup?: 'primary' | 'upper_primary'
 ): Promise<Record<string, number>> => {
   const balances: Record<string, number> = {};
 
@@ -44,9 +48,10 @@ export const reconstructOpeningBalances = async (
         .lt('receipt_date', cutoffDate),
       supabase
         .from('consumption_logs')
-        .select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used')
+        .select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used, standard_group')
         .eq('teacher_id', teacherId)
         .lt('log_date', cutoffDate)
+        .or(standardGroup ? `standard_group.eq.${standardGroup},standard_group.is.null` : 'standard_group.is.null,standard_group.neq.null')
     ]);
 
     // 1. Initial Sum of Receipts
@@ -70,7 +75,8 @@ export const reconstructOpeningBalances = async (
             pAtt,
             uAtt,
             itemMaster.grams_primary || 0,
-            itemMaster.grams_upper_primary || 0
+            itemMaster.grams_upper_primary || 0,
+            standardGroup || (log as any).standard_group
           );
           balances[itemName] = (balances[itemName] || 0) - kg;
         }
@@ -88,4 +94,20 @@ export const reconstructOpeningBalances = async (
  */
 export const formatDateSafely = (date: Date): string => {
   return date.toISOString().split('T')[0];
+};
+
+/**
+ * Universal quantity formatter for PM-POSHAN reporting.
+ * - Standard items: 3 decimal places (e.g. 5.250 KG)
+ * - Micro-quantities (spices): up to 5 decimal places (e.g. 0.00024 KG)
+ * - Zero values: Display as dash or 0.000 based on context
+ */
+export const formatQuantity = (val: number | string | null | undefined, zeroAsDash = false): string => {
+  const num = Number(val || 0);
+  if (num === 0) return zeroAsDash ? '-' : '0.000';
+  
+  if (num > 0 && num < 0.001) {
+    return num.toFixed(5);
+  }
+  return num.toFixed(3);
 };

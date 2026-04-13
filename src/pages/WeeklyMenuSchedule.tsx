@@ -146,7 +146,7 @@ export default function WeeklyMenuSchedule() {
     try {
       const { error: upsertError } = await (supabase as any)
         .from('menu_weekly_schedule')
-        .upsert(schedule);
+        .upsert(schedule, { onConflict: 'teacher_id,week_pattern,day_name' });
 
       if (upsertError) throw upsertError;
 
@@ -174,7 +174,7 @@ export default function WeeklyMenuSchedule() {
     const blockRows = schedule.filter((s: ScheduleRow) => s.week_pattern === type);
 
     return (
-      <div className="bg-white border-2 border-indigo-900/10 rounded-2xl overflow-hidden shadow-2xl shadow-indigo-900/5 mb-12">
+      <div className="bg-white border-2 border-indigo-900/10 rounded-2xl overflow-hidden shadow-2xl shadow-indigo-900/5 h-full">
         <div className="bg-[#474379] p-5 flex justify-between items-center bg-gradient-to-r from-[#474379] to-[#34305c]">
           <h2 className="text-white font-black uppercase tracking-widest text-[15px] italic font-['Outfit']">
             📅 {type === 'WEEK_1_3_5' ? 'Schedule A (Week 1, 3, 5)' : 'Schedule B (Week 2, 4)'}
@@ -187,61 +187,66 @@ export default function WeeklyMenuSchedule() {
             return (
               <div
                 key={row.day_name}
-                className={`p-4 grid grid-cols-1 md:grid-cols-12 gap-4 items-start transition-all ${!row.is_active ? 'bg-slate-50/50 grayscale' : 'bg-white hover:bg-slate-50/30'}`}
+                className={`p-3 px-2 flex flex-col gap-3 transition-all ${!row.is_active ? 'bg-slate-50/50 grayscale' : 'bg-white hover:bg-slate-50/30'}`}
               >
                 {/* 1. Day & Toggle */}
-                <div className="md:col-span-2 flex items-center gap-4">
+                <div className="flex items-center gap-3 border-b border-slate-100 pb-2">
                   <button onClick={() => handleToggleDay(type, row.day_name)} className="focus:outline-none">
                     {row.is_active ? (
-                      <ToggleRight size={32} className="text-[#00a65a] transition-all" />
+                      <ToggleRight size={28} className="text-[#00a65a] transition-all" />
                     ) : (
-                      <ToggleLeft size={32} className="text-slate-300 transition-all" />
+                      <ToggleLeft size={28} className="text-slate-300 transition-all" />
                     )}
                   </button>
-                  <span className={`text-[13px] font-black uppercase tracking-wider ${row.is_active ? 'text-slate-800' : 'text-slate-400'}`}>
+                  <span className={`text-[12px] font-black uppercase tracking-wider ${row.is_active ? 'text-slate-800' : 'text-slate-400'}`}>
                     {dayName}
                   </span>
                 </div>
 
-                {/* 2. Main Meal Plate (Multi-select) */}
-                <div className="md:col-span-5 space-y-2">
-                  <div className={`grid grid-cols-2 gap-2 border-2 border-dashed border-slate-100 p-3 rounded-xl min-h-[100px] ${!row.is_active ? 'opacity-30 pointer-events-none' : 'bg-white shadow-inner'}`}>
-                    {mainFoods.map(food => (
-                      <label
-                        key={food.id}
-                        className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer transition-all border ${row.main_food_codes.includes(food.id) ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-slate-50 border-slate-100 text-slate-500 hover:bg-slate-100'}`}
-                      >
-                        <input
-                          type="checkbox" className="hidden"
-                          checked={row.main_food_codes.includes(food.id)}
-                          onChange={() => toggleMultiSelect(type, row.day_name, 'main_food_codes', food.id)}
-                        />
-                        <span className="text-[11px] font-black leading-none truncate uppercase tracking-tighter">
-                          {food.name}
-                        </span>
-                      </label>
-                    ))}
+                {/* Selection Area */}
+                <div className="space-y-4">
+                  {/* Main Meals */}
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">मुख्य अन्न (Main Foods)</label>
+                    <div className={`flex flex-wrap gap-1.5 min-h-[40px] ${!row.is_active ? 'opacity-30 pointer-events-none' : ''}`}>
+                      {mainFoods.map(food => (
+                        <label
+                          key={food.id}
+                          className={`w-fit inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition-all border ${row.main_food_codes.includes(food.id) ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100 hover:border-slate-300'}`}
+                        >
+                          <input
+                            type="checkbox" className="hidden"
+                            checked={row.main_food_codes.includes(food.id)}
+                            onChange={() => toggleMultiSelect(type, row.day_name, 'main_food_codes', food.id)}
+                          />
+                          <span className="text-[10px] font-black leading-none uppercase tracking-tighter whitespace-nowrap">
+                            {food.name}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                {/* 3. Ingredients checklist */}
-                <div className="md:col-span-5 space-y-2">
-                  <div className={`grid grid-cols-2 gap-2 border-2 border-dashed border-slate-100 p-3 rounded-xl min-h-[100px] ${!row.is_active ? 'opacity-30 pointer-events-none' : 'bg-white shadow-inner'}`}>
-                    {ingredients.map(item => (
-                      <label
-                        key={item.id}
-                        className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer transition-all border ${row.menu_items.includes(item.id) ? 'bg-indigo-900 border-indigo-900 text-white shadow-md' : 'bg-slate-50 border-slate-100 text-slate-400 hover:bg-slate-100'}`}
-                      >
-                        <input
-                          type="checkbox" className="hidden"
-                          checked={row.menu_items.includes(item.id)}
-                          onChange={() => toggleMultiSelect(type, row.day_name, 'menu_items', item.id)}
-                        />
-                        <span className="text-[10px] font-bold leading-none truncate uppercase">
-                          {item.id.startsWith('L_') ? '📌 ' : ''}{item.name}
-                        </span>
-                      </label>
-                    ))}
+                  {/* Ingredients */}
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">साहित्य (Ingredients)</label>
+                    <div className={`flex flex-wrap gap-1.5 min-h-[40px] ${!row.is_active ? 'opacity-30 pointer-events-none' : ''}`}>
+                      {ingredients.map(item => (
+                        <label
+                          key={item.id}
+                          className={`w-fit inline-flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-all border ${row.menu_items.includes(item.id) ? 'bg-indigo-900 border-indigo-900 text-white shadow-md' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100 hover:border-slate-300'}`}
+                        >
+                          <input
+                            type="checkbox" className="hidden"
+                            checked={row.menu_items.includes(item.id)}
+                            onChange={() => toggleMultiSelect(type, row.day_name, 'menu_items', item.id)}
+                          />
+                          <span className="text-[9px] font-bold leading-none uppercase whitespace-nowrap">
+                            {item.id.startsWith('L_') ? '📌 ' : ''}{item.name}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -275,7 +280,7 @@ export default function WeeklyMenuSchedule() {
           </div>
         )}
 
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 items-start">
           {renderScheduleBlock('WEEK_1_3_5')}
           {renderScheduleBlock('WEEK_2_4')}
         </div>

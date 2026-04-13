@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout';
-import { Trash2, PlusCircle, X, Check, Loader2, Search } from 'lucide-react';
+import { Trash2, PlusCircle, X, Check, Loader2, Search, Edit2 } from 'lucide-react';
 
 // Combined food item for the dropdown
 interface FoodOption {
@@ -39,6 +39,7 @@ export default function TeacherMenuMaster() {
   const [gramsPrimary, setGramsPrimary] = useState<number | ''>('');
   const [gramsUpperPrimary, setGramsUpperPrimary] = useState<number | ''>('');
   const [loading, setLoading] = useState(false);
+  const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
 
   // Section Configuration
   const [hasPrimary, setHasPrimary] = useState<boolean>(true);
@@ -187,6 +188,36 @@ export default function TeacherMenuMaster() {
     setIsCustomValidated(false); // require re-validation if they change anything
   };
 
+  const formatCalibrationValue = (val: number | string) => {
+    if (val === '' || val === 0) return null;
+    const num = Number(val);
+    if (isNaN(num) || num < 0) return null;
+    
+    if (num >= 0.001) {
+      return `${(num * 1000).toLocaleString('mr-IN', { maximumFractionDigits: 2 })} ग्रॅम`;
+    } else if (num > 0) {
+      return `${(num * 1000000).toLocaleString('mr-IN', { maximumFractionDigits: 2 })} मिलीग्रॅम`;
+    }
+    return null;
+  };
+
+  const handleEditClick = (item: MenuItem) => {
+    setSelectedCode(item.item_code);
+    setGramsPrimary(item.grams_primary / 1000);
+    setGramsUpperPrimary(item.grams_upper_primary / 1000);
+    setEditingItem(item);
+    setMessage({ type: '', text: '' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelEdit = () => {
+    setEditingItem(null);
+    setSelectedCode('');
+    setGramsPrimary('');
+    setGramsUpperPrimary('');
+    setMessage({ type: '', text: '' });
+  };
+
   // ── Add item to menu_master ──────────────────────────────────────
   const addItem = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -201,31 +232,43 @@ export default function TeacherMenuMaster() {
     }
 
     const selectedFood = foodOptions.find(f => f.code === selectedCode);
-    if (!selectedFood) return;
+    if (!selectedFood && !editingItem) return;
 
     setLoading(true);
     setMessage({ type: '', text: '' });
     try {
-      const { error } = await (supabase as any).from('menu_master').insert({
+      const payload = {
         teacher_id: userId,
-        item_name: selectedFood.name,
+        item_name: editingItem ? editingItem.item_name : selectedFood!.name,
         item_code: selectedCode,
         grams_primary: Number(pVal) * 1000,
         grams_upper_primary: Number(uVal) * 1000,
-        source: selectedFood.type,
-        item_category: selectedFood.item_category
-      });
+        source: editingItem ? editingItem.source : selectedFood!.type,
+        item_category: editingItem ? editingItem.item_category : selectedFood!.item_category
+      };
 
-      if (error) throw error;
+      if (editingItem) {
+        const { error } = await (supabase as any)
+          .from('menu_master')
+          .update(payload)
+          .eq('id', editingItem.id)
+          .eq('teacher_id', userId);
+        if (error) throw error;
+        setMessage({ type: 'success', text: `"${editingItem.item_name}" अपडेट केले.` });
+      } else {
+        const { error } = await (supabase as any).from('menu_master').insert(payload);
+        if (error) throw error;
+        setMessage({ type: 'success', text: `"${selectedFood!.name}" यादीत जोडले.` });
+      }
 
-      setMessage({ type: 'success', text: `"${selectedFood.name}" यादीत जोडले.` });
+      setEditingItem(null);
       setSelectedCode('');
       setGramsPrimary('');
       setGramsUpperPrimary('');
       fetchMenu();
       setTimeout(() => setMessage({ type: '', text: '' }), 3000);
     } catch (err: any) {
-      setMessage({ type: 'error', text: 'जोडणे अयशस्वी: ' + err.message });
+      setMessage({ type: 'error', text: (editingItem ? 'अपडेट' : 'जोडणे') + ' अयशस्वी: ' + err.message });
     } finally {
       setLoading(false);
     }
@@ -281,7 +324,11 @@ export default function TeacherMenuMaster() {
   const deleteItem = async (id: string) => {
     if (!window.confirm('हा आयटम काढायचा आहे का?')) return;
     try {
-      const { error } = await supabase.from('menu_master').delete().eq('id', id);
+      const { error } = await supabase
+        .from('menu_master')
+        .delete()
+        .eq('id', id)
+        .eq('teacher_id', userId!);
       if (error) throw error;
       fetchMenu();
     } catch (err: any) {
@@ -320,6 +367,19 @@ export default function TeacherMenuMaster() {
             दैनिक मेनूमध्ये आयटम जोडा
           </h3>
 
+          {/* conversion advice banner */}
+          <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6 shadow-sm">
+            <div className="text-[13px] text-blue-800">
+              <p className="font-bold mb-1">📌 महत्त्वाची सूचना: कृपया प्रमाण किलो (KG) मध्येच भरा.</p>
+              <ul className="list-disc pl-5 space-y-0.5">
+                <li><strong>१०० ग्रॅम</strong> भरायचे असल्यास <strong>0.10000</strong> लिहा.</li>
+                <li><strong>२० ग्रॅम</strong> भरायचे असल्यास <strong>0.02000</strong> लिहा.</li>
+                <li><strong>१ ग्रॅम</strong> भरायचे असल्यास <strong>0.00100</strong> लिहा.</li>
+                <li><strong>२० मिलीग्रॅम</strong> (मोहरी/जिरे इ.) भरायचे असल्यास <strong>0.00002</strong> लिहा.</li>
+              </ul>
+            </div>
+          </div>
+
           <form onSubmit={addItem}>
             <div className="flex flex-col md:flex-row gap-3 items-end">
               <div className="flex-1 w-full">
@@ -331,9 +391,9 @@ export default function TeacherMenuMaster() {
                     required
                     value={selectedCode}
                     onChange={e => setSelectedCode(e.target.value)}
-                    disabled={listLoading}
+                    disabled={listLoading || !!editingItem}
                     title="खाद्यपदार्थ निवडा (Select Food Item)"
-                    className="flex-1 border border-slate-300 p-2.5 text-sm font-bold focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] text-slate-700 bg-white disabled:bg-slate-50 rounded-none shadow-sm"
+                    className="flex-1 border border-slate-300 p-2.5 text-sm font-bold focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] text-slate-700 bg-white disabled:bg-slate-100 rounded-none shadow-sm"
                   >
                     <option value="">
                       {listLoading ? 'यादी लोड होत आहे...' : '-- निवडा --'}
@@ -371,6 +431,11 @@ export default function TeacherMenuMaster() {
                       className="w-full border border-slate-300 p-2.5 text-sm font-black text-slate-700 focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] rounded-none shadow-sm bg-slate-50/30"
                       placeholder="0.00500"
                     />
+                    {gramsPrimary !== '' && (
+                      <div className="text-[10px] text-green-600 font-black mt-1 bg-green-50 px-2 py-0.5 border border-green-100 italic">
+                        ↳ म्हणजे: {formatCalibrationValue(gramsPrimary)}
+                      </div>
+                    )}
                   </div>
                 )}
                 {hasUpperPrimary && (
@@ -384,16 +449,31 @@ export default function TeacherMenuMaster() {
                       className="w-full border border-slate-300 p-2.5 text-sm font-black text-slate-700 focus:outline-none focus:border-[#474379] focus:ring-1 focus:ring-[#474379] rounded-none shadow-sm bg-slate-50/30"
                       placeholder="0.01000"
                     />
+                    {gramsUpperPrimary !== '' && (
+                      <div className="text-[10px] text-green-600 font-black mt-1 bg-green-50 px-2 py-0.5 border border-green-100 italic">
+                        ↳ म्हणजे: {formatCalibrationValue(gramsUpperPrimary)}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
 
-              <button
-                type="submit" disabled={loading || !selectedCode}
-                className="w-full md:w-auto bg-[#00a65a] hover:bg-[#008d4c] text-white px-8 py-2.5 font-black uppercase tracking-widest transition-all shadow-md active:scale-95 text-[11px] h-[46px]"
-              >
-                {loading ? 'Processing...' : 'Add to Active Menu'}
-              </button>
+               <div className="flex gap-2 w-full md:w-auto">
+                <button
+                  type="submit" disabled={loading || !selectedCode}
+                  className={`flex-1 md:w-auto text-white px-8 py-2.5 font-black uppercase tracking-widest transition-all shadow-md active:scale-95 text-[11px] h-[46px] ${editingItem ? 'bg-blue-600 hover:bg-blue-700' : 'bg-[#00a65a] hover:bg-[#008d4c]'}`}
+                >
+                  {loading ? 'Processing...' : editingItem ? 'Update Item' : 'Add to Active Menu'}
+                </button>
+                {editingItem && (
+                  <button
+                    type="button" onClick={cancelEdit}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-2.5 font-black uppercase tracking-widest transition-all shadow-sm text-[11px] h-[46px]"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
             </div>
           </form>
 
@@ -505,7 +585,7 @@ export default function TeacherMenuMaster() {
                     <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-center w-20 tracking-tighter">स्त्रोत</th>
                     {hasPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-right w-24 tracking-tighter leading-none">१ ली - ५ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
                     {hasUpperPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-right w-24 tracking-tighter leading-none">६ वी - ८ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
-                    <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-center w-12 tracking-tighter"></th>
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#474379] uppercase text-center w-20 tracking-tighter">अ‍ॅक्शन</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -526,7 +606,8 @@ export default function TeacherMenuMaster() {
                         </td>
                         {hasPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_primary / 1000).toFixed(5)}</td>}
                         {hasUpperPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_upper_primary / 1000).toFixed(5)}</td>}
-                        <td className="py-2 px-3 text-center">
+                        <td className="py-2 px-3 text-center flex items-center justify-center gap-2">
+                          <button onClick={()=>handleEditClick(item)} title="बदल करा (Edit Item)" className="text-slate-300 hover:text-blue-600 p-1 transition-colors"><Edit2 size={14} /></button>
                           <button onClick={()=>deleteItem(item.id)} title="काढून टाका (Delete Item)" className="text-slate-300 hover:text-red-500 p-1 transition-colors"><Trash2 size={14} /></button>
                         </td>
                       </tr>
@@ -551,7 +632,7 @@ export default function TeacherMenuMaster() {
                     <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-center w-20 tracking-tighter">स्त्रोत</th>
                     {hasPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-right w-24 tracking-tighter leading-none">१ ली - ५ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
                     {hasUpperPrimary && <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-right w-24 tracking-tighter leading-none">६ वी - ८ वी <br/><span className="text-[8px] opacity-70">(KG)</span></th>}
-                    <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-center w-12 tracking-tighter"></th>
+                    <th className="py-2.5 px-3 text-[10px] font-black text-[#3c8dbc] uppercase text-center w-20 tracking-tighter">अ‍ॅक्शन</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -572,7 +653,8 @@ export default function TeacherMenuMaster() {
                         </td>
                         {hasPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_primary / 1000).toFixed(5)}</td>}
                         {hasUpperPrimary && <td className="py-2 px-3 text-[12px] font-black text-slate-600 text-right">{(item.grams_upper_primary / 1000).toFixed(5)}</td>}
-                        <td className="py-2 px-3 text-center">
+                        <td className="py-2 px-3 text-center flex items-center justify-center gap-2">
+                          <button onClick={()=>handleEditClick(item)} title="बदल करा (Edit Item)" className="text-slate-300 hover:text-blue-600 p-1 transition-colors"><Edit2 size={14} /></button>
                           <button onClick={()=>deleteItem(item.id)} title="काढून टाका (Delete Item)" className="text-slate-300 hover:text-red-500 p-1 transition-colors"><Trash2 size={14} /></button>
                         </td>
                       </tr>

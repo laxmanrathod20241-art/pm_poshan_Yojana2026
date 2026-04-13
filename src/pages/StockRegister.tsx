@@ -10,6 +10,7 @@ export default function StockRegister() {
   const [foodName, setFoodName] = useState('');
   const [quantityKg, setQuantityKg] = useState<number | ''>('');
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().split('T')[0]);
+  const [targetGroup, setTargetGroup] = useState<'primary' | 'upper_primary'>('primary');
 
   // Data State
   const [inventory, setInventory] = useState<any[]>([]);
@@ -27,6 +28,9 @@ export default function StockRegister() {
   const [fetchLoading, setFetchLoading] = useState(true);
   const [message, setMessage] = useState({ type: '', text: '' });
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterGroup, setFilterGroup] = useState<'all' | 'primary' | 'upper_primary'>('all');
+  const [hasPrimary, setHasPrimary] = useState(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState(true);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -43,8 +47,34 @@ export default function StockRegister() {
       fetchStockData();
       fetchMenuOptions();
       fetchFoodNames();
+      fetchProfile(userId);
     }
   }, [userId, reportMonth]);
+
+  const fetchProfile = async (uid: string) => {
+    try {
+      const { data, error } = await (supabase as any)
+        .from('profiles')
+        .select('has_primary, has_upper_primary')
+        .eq('id', uid)
+        .single();
+      
+      if (error) throw error;
+      if (data) {
+        setHasPrimary(data.has_primary ?? true);
+        setHasUpperPrimary(data.has_upper_primary ?? true);
+        
+        // Auto-snap targetGroup if only one section exists
+        if (data.has_primary === false && data.has_upper_primary === true) {
+          setTargetGroup('upper_primary');
+        } else {
+          setTargetGroup('primary');
+        }
+      }
+    } catch (err) {
+      console.error("Profile fetch error:", err);
+    }
+  };
 
   const fetchFoodNames = async () => {
     if (!userId) return;
@@ -120,6 +150,12 @@ export default function StockRegister() {
     }
   };
 
+  const filteredInventory = inventory.filter(inv => {
+    const matchesSearch = inv.item_name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesGroup = filterGroup === 'all' || inv.standard_group === filterGroup;
+    return matchesSearch && matchesGroup;
+  });
+
   const calculateMonthlyTotal = (itemName: string) => {
     return monthlyReceipts
       .filter((rec) => rec.item_name === itemName)
@@ -143,7 +179,8 @@ export default function StockRegister() {
           teacher_id: userId,
           item_name: foodName,
           quantity_kg: Number(quantityKg),
-          receipt_date: receiptDate
+          receipt_date: receiptDate,
+          standard_group: targetGroup
         });
 
       if (recError) throw recError;
@@ -153,6 +190,7 @@ export default function StockRegister() {
         .select('id, current_balance')
         .eq('teacher_id', userId)
         .eq('item_name', foodName)
+        .eq('standard_group', targetGroup)
         .maybeSingle();
 
       if (existData) {
@@ -167,7 +205,8 @@ export default function StockRegister() {
           .insert({
             teacher_id: userId,
             item_name: foodName,
-            current_balance: Number(quantityKg)
+            current_balance: Number(quantityKg),
+            standard_group: targetGroup
           });
         if (invError) throw invError;
       }
@@ -189,7 +228,11 @@ export default function StockRegister() {
     if (!window.confirm('Are you sure you want to remove this item?')) return;
     setLoading(true);
     try {
-      await (supabase as any).from('inventory_stock').delete().eq('id', stockId);
+      await (supabase as any)
+        .from('inventory_stock')
+        .delete()
+        .eq('id', stockId)
+        .eq('teacher_id', userId);
       fetchStockData();
     } catch (err: any) {
       console.error(err);
@@ -206,9 +249,17 @@ export default function StockRegister() {
       const { data: invData } = await (supabase as any).from('inventory_stock').select('id, current_balance').eq('teacher_id', userId).eq('item_name', itemName).maybeSingle();
       if (invData) {
         const newBalance = Number((invData as any).current_balance) - Number(qty);
-        await (supabase as any).from('inventory_stock').update({ current_balance: newBalance }).eq('id', (invData as any).id);
+        await (supabase as any)
+          .from('inventory_stock')
+          .update({ current_balance: newBalance })
+          .eq('id', (invData as any).id)
+          .eq('teacher_id', userId);
       }
-      await (supabase as any).from('stock_receipts').delete().eq('id', id);
+      await (supabase as any)
+        .from('stock_receipts')
+        .delete()
+        .eq('id', id)
+        .eq('teacher_id', userId);
       fetchStockData();
     } catch (err: any) {
       console.error(err);
@@ -263,7 +314,29 @@ export default function StockRegister() {
                   <input type="date" required value={receiptDate} onChange={e => setReceiptDate(e.target.value)} className="w-full border border-slate-300 p-2 text-sm font-bold bg-slate-50/30 outline-none" title="पावतिची तारीख (Date of Receipt)" placeholder="DD/MM/YYYY" />
                 </div>
 
-                {foodName && inventory.find(i => i.item_name === foodName)?.current_balance < 0 && (
+                {hasPrimary && hasUpperPrimary && (
+                  <div className="pt-2">
+                    <label className="block text-[10px] font-black text-slate-400 mb-2 uppercase tracking-widest">Target Standard Group</label>
+                    <div className="flex bg-slate-100 p-1 rounded-xl">
+                      <button 
+                        type="button" 
+                        onClick={() => setTargetGroup('primary')}
+                        className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${targetGroup === 'primary' ? 'bg-[#3c8dbc] text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Primary (I-V)
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => setTargetGroup('upper_primary')}
+                        className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${targetGroup === 'upper_primary' ? 'bg-[#474379] text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Upper (VI-VIII)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {foodName && inventory.find(i => i.item_name === foodName && i.standard_group === targetGroup)?.current_balance < 0 && (
                   <div className="bg-amber-50 p-3 border border-amber-200 flex items-center gap-2">
                     <AlertTriangle size={16} className="text-amber-600" />
                     <p className="text-[10px] font-black text-amber-700 uppercase tracking-tight">
@@ -286,15 +359,29 @@ export default function StockRegister() {
                   <span className="font-bold uppercase tracking-wider text-[13px]">Inventory Visual Master</span>
                   <span className="text-white/60 text-xs font-medium bg-white/10 px-3 py-1 rounded">Live Data</span>
                 </div>
-                <div className="relative group">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-white transition-colors" />
-                  <input 
-                    type="text" 
-                    placeholder="Filter..." 
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="bg-white/10 border border-white/20 rounded-lg pl-9 pr-4 py-1.5 text-[10px] md:text-xs font-bold focus:bg-white/20 focus:border-white/40 outline-none placeholder:text-white/30 transition-all w-32 md:w-64"
-                  />
+                <div className="flex items-center gap-3">
+                  {hasPrimary && hasUpperPrimary && (
+                    <select 
+                      value={filterGroup} 
+                      onChange={e => setFilterGroup(e.target.value as any)}
+                      className="bg-white/10 border border-white/20 rounded-lg px-3 py-1.5 text-[10px] md:text-xs font-bold text-white outline-none cursor-pointer hover:bg-white/20 transition-all"
+                      title="साठा फिल्टर करा (Filter stock items)"
+                    >
+                      <option value="all" className="bg-[#474379] text-white">All Groups</option>
+                      <option value="primary" className="bg-[#474379] text-white text-blue-400">Primary (I-V)</option>
+                      <option value="upper_primary" className="bg-[#474379] text-white text-amber-400">Upper (VI-VIII)</option>
+                    </select>
+                  )}
+                  <div className="relative group">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-white transition-colors" />
+                    <input 
+                      type="text" 
+                      placeholder="Search..." 
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="bg-white/10 border border-white/20 rounded-lg pl-9 pr-4 py-1.5 text-[10px] md:text-xs font-bold focus:bg-white/20 focus:border-white/40 outline-none placeholder:text-white/30 transition-all w-24 md:w-48"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -314,79 +401,64 @@ export default function StockRegister() {
                   <tbody>
                     {fetchLoading ? (
                       <tr><td colSpan={6} className="p-8 text-center text-sm font-bold text-slate-400">Loading metrics...</td></tr>
-                    ) : inventory.filter(inv => {
-                        const search = searchTerm.toLowerCase();
-                        if (!search) return true;
-
-                        const itemReceipts = monthlyReceipts.filter(r => r.item_name === inv.item_name);
-                        const lastReceipt = itemReceipts.length > 0 ? itemReceipts[0].receipt_date : null;
-                        const displayDate = lastReceipt ? new Date(lastReceipt).toLocaleDateString('en-GB') : (inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-GB') : '-');
-                        return inv.item_name.toLowerCase().includes(search) || displayDate.includes(search);
-                      }).length === 0 ? (
+                    ) : filteredInventory.length === 0 ? (
                       <tr><td colSpan={6} className="p-8 text-center text-sm font-bold text-slate-400">No matching inventory.</td></tr>
                     ) : (
-                      inventory
-                        .filter(inv => {
-                          const search = searchTerm.toLowerCase();
-                          if (!search) return true;
-
-                          const itemReceipts = monthlyReceipts.filter(r => r.item_name === inv.item_name);
-                          const lastReceipt = itemReceipts.length > 0 ? itemReceipts[0].receipt_date : null;
-                          const displayDate = lastReceipt ? new Date(lastReceipt).toLocaleDateString('en-GB') : (inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-GB') : '-');
-                          return inv.item_name.toLowerCase().includes(search) || displayDate.includes(search);
-                        })
-                        .map((inv) => {
-                          const monthlyTotal = calculateMonthlyTotal(inv.item_name);
-                          const balance = Number(inv.current_balance);
-                          const status = getStatusColor(balance);
-                          const itemReceipts = monthlyReceipts.filter(r => r.item_name === inv.item_name);
-                          const lastReceipt = itemReceipts.length > 0 ? itemReceipts[0].receipt_date : null;
-                          const displayDate = lastReceipt ? new Date(lastReceipt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : (inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '-');
-                          return (
-                            <tr key={inv.id} className={`border-b border-slate-200 transition-colors ${status.bg}`}>
-                              <td className="p-4 text-[12px] font-bold text-slate-500 border-r border-slate-200">{displayDate}</td>
-                              <td className="p-4 text-[14px] font-extrabold text-slate-800 border-r border-slate-200">{inv.item_name}</td>
-                              <td className="p-4 text-[13px] font-semibold text-slate-600 border-r border-slate-200">{monthlyTotal.toFixed(2)} kg</td>
-                              <td className={`p-4 text-[15px] font-black border-r border-slate-200 ${status.text}`}>
-                                {balance < 0 ? (
-                                  <div className="flex flex-col">
-                                    <span className="text-red-600 line-through opacity-40 text-xs">0.00 kg</span>
-                                    <span className="text-[16px] animate-pulse">-{Math.abs(balance).toFixed(2)} kg</span>
-                                  </div>
-                                ) : (
-                                  `${balance.toFixed(2)} kg`
-                                )}
-                              </td>
-                              <td className="p-4 text-center border-r border-slate-200">
-                                <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase text-white ${status.badge} shadow-sm`}>
-                                  {balance < 0 ? '⚠️ उसणे बाकी' : status.label}
+                      filteredInventory.map((inv) => {
+                        const monthlyTotal = calculateMonthlyTotal(inv.item_name);
+                        const balance = Number(inv.current_balance);
+                        const status = getStatusColor(balance);
+                        const itemReceipts = monthlyReceipts.filter(r => r.item_name === inv.item_name);
+                        const lastReceipt = itemReceipts.length > 0 ? itemReceipts[0].receipt_date : null;
+                        const displayDate = lastReceipt ? new Date(lastReceipt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : (inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '-');
+                        
+                        return (
+                          <tr key={inv.id} className={`border-b border-slate-200 transition-colors ${status.bg}`}>
+                            <td className="p-4 text-[12px] font-bold text-slate-500 border-r border-slate-200">{displayDate}</td>
+                            <td className="p-4 border-r border-slate-200">
+                              <div className="flex flex-col">
+                                <span className="text-[14px] font-extrabold text-slate-800">{inv.item_name}</span>
+                                <span className={`text-[8px] font-black uppercase tracking-widest mt-1 ${inv.standard_group === 'upper_primary' ? 'text-[#474379]' : 'text-[#3c8dbc]'}`}>
+                                  {inv.standard_group === 'upper_primary' ? 'Upper (VI-VIII)' : 'Primary (I-V)'}
                                 </span>
-                              </td>
-                              <td className="p-4 text-center">
-                                <button title="साठा हटवा (Delete Inventory Item)" onClick={() => handleDeleteInventoryItem(inv.id)} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button>
-                              </td>
-                            </tr>
-                          );
-                        })
+                              </div>
+                            </td>
+                            <td className="p-4 text-[13px] font-semibold text-slate-600 border-r border-slate-200">{monthlyTotal.toFixed(2)} kg</td>
+                            <td className={`p-4 text-[15px] font-black border-r border-slate-200 ${status.text}`}>
+                              {balance < 0 ? (
+                                <div className="flex flex-col">
+                                  <span className="text-red-600 line-through opacity-40 text-xs">0.00 kg</span>
+                                  <span className="text-[16px] animate-pulse">-{Math.abs(balance).toFixed(2)} kg</span>
+                                </div>
+                              ) : (
+                                `${balance.toFixed(2)} kg`
+                              )}
+                            </td>
+                            <td className="p-4 text-center border-r border-slate-200">
+                              <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase text-white ${status.badge} shadow-sm`}>
+                                {balance < 0 ? '⚠️ उसणे बाकी' : status.label}
+                              </span>
+                            </td>
+                            <td className="p-4 text-center">
+                              <button title="साठा हटवा (Delete Inventory Item)" onClick={() => handleDeleteInventoryItem(inv.id)} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
               </div>
 
               {/* Mobile Card List View */}
-              <div className="md:hidden divide-y divide-slate-100">
+               <div className="md:hidden divide-y divide-slate-100">
                 {fetchLoading ? (
                    <div className="p-10 text-center text-xs font-black text-slate-400">LOADING INVENTORY...</div>
-                ) : inventory.filter(inv => {
-                    const search = searchTerm.toLowerCase();
-                    return inv.item_name.toLowerCase().includes(search);
-                  }).length === 0 ? (
+                ) : filteredInventory.length === 0 ? (
                   <div className="p-10 text-center text-xs font-black text-slate-400 uppercase tracking-widest">No matching stock found.</div>
                 ) : (
-                  inventory
-                    .filter(inv => inv.item_name.toLowerCase().includes(searchTerm.toLowerCase()))
+                  filteredInventory
                     .map((inv) => {
-                      const monthlyTotal = calculateMonthlyTotal(inv.item_name);
                       const balance = Number(inv.current_balance);
                       const status = getStatusColor(balance);
                       return (
@@ -397,7 +469,9 @@ export default function StockRegister() {
                               <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white ${status.badge}`}>
                                 {balance < 0 ? 'उसणे (Debt)' : status.label}
                               </span>
-                              <span className="text-[10px] font-bold text-slate-400">Total: {monthlyTotal.toFixed(1)}kg</span>
+                              <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase text-white ${inv.standard_group === 'upper_primary' ? 'bg-[#474379]' : 'bg-[#3c8dbc]'}`}>
+                                {inv.standard_group === 'upper_primary' ? 'I-VIII' : 'I-V'}
+                              </span>
                             </div>
                           </div>
                           <div className="text-right flex flex-col items-end gap-2">

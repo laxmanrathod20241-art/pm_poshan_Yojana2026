@@ -1,9 +1,16 @@
-// @ts-nocheck
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout';
 import { Loader2, Save, Printer, RefreshCw, FileText, AlertCircle } from 'lucide-react';
 import { useReactToPrint } from 'react-to-print';
+import type { Database } from '../types/database.types';
+
+type Profile = Database['public']['Tables']['profiles']['Row'];
+type DailyLog = Database['public']['Tables']['daily_logs']['Row'];
+type ConsumptionLog = Database['public']['Tables']['consumption_logs']['Row'];
+type FuelTracking = Database['public']['Tables']['fuel_tracking']['Row'];
+type CookingStaff = Database['public']['Tables']['cooking_staff']['Row'];
+type MonthlyReportSnapshot = Database['public']['Tables']['monthly_reports']['Row'];
 
 interface MenuItem {
   item_code: string;
@@ -21,6 +28,41 @@ interface ScheduleRow {
   menu_items: string[];
 }
 
+interface DailyRow {
+  date: string;
+  formattedDate: string;
+  dayName: string;
+  marathiDayName: string;
+  menuName: string;
+  primaryAtt: number;
+  upperAtt: number;
+  honorarium: number;
+  fuelCost: number;
+  vegCost: number;
+  consumptions: Record<string, string>;
+}
+
+interface TopSummaries {
+  opening: Record<string, string>;
+  received: Record<string, string>;
+  total: Record<string, string>;
+}
+
+interface FooterTotals {
+  primaryAtt: number;
+  upperAtt: number;
+  totalHonorarium: number;
+  totalFuel: number;
+  totalVeg: number;
+  consumptions: Record<string, string>;
+}
+
+interface LedgerData {
+  topSummaries: TopSummaries;
+  dailyRows: DailyRow[];
+  footerTotals: FooterTotals;
+}
+
 
 
 export default function DailyLedgerReport() {
@@ -29,6 +71,9 @@ export default function DailyLedgerReport() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isViewingSnapshot, setIsViewingSnapshot] = useState(false);
+  const [selectedScope, setSelectedScope] = useState<'primary' | 'upper_primary'>('primary');
+  const [hasPrimary, setHasPrimary] = useState(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState(true);
   const printRef = useRef<HTMLDivElement>(null);
 
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
@@ -46,25 +91,50 @@ export default function DailyLedgerReport() {
   const [centerName, setCenterName] = useState('');
   const [totalEnrollment, setTotalEnrollment] = useState(0);
 
-  // Section Configuration
-  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
-  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
-
   // Columns
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   // Generated Matrix Data
-  const [ledgerData, setLedgerData] = useState<any>(null);
+  const [ledgerData, setLedgerData] = useState<LedgerData | null>(null);
+
+  const fetchProfile = async (uid: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('school_name_mr, center_name_mr, has_primary, has_upper_primary')
+        .eq('id', uid)
+        .returns<Profile[]>()
+        .single();
+      
+      if (error) throw error;
+      if (data) {
+        setSchoolName(data.school_name_mr || '');
+        setCenterName(data.center_name_mr || '');
+        setHasPrimary(data.has_primary ?? true);
+        setHasUpperPrimary(data.has_upper_primary ?? true);
+        
+        // Safety check: If currently selected scope is not supported by the profile, switch it
+        if (selectedScope === 'primary' && data.has_primary === false && data.has_upper_primary === true) {
+          setSelectedScope('upper_primary');
+        } else if (selectedScope === 'upper_primary' && data.has_upper_primary === false && data.has_primary === true) {
+          setSelectedScope('primary');
+        }
+      }
+    } catch (error: any) {
+      console.error('Profile fetch error:', error.message);
+    }
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUserId(session.user.id);
-        fetchLedgerData(session.user.id, selectedMonth, selectedYear);
+        fetchProfile(session.user.id);
+        fetchLedgerData(session.user.id, selectedMonth, selectedYear, false, selectedScope);
       }
     });
-  }, [selectedMonth, selectedYear]);
+  }, [selectedMonth, selectedYear, selectedScope]);
 
-  const fetchLedgerData = async (id: string, month: number, year: number, forceSync = false) => {
+  const fetchLedgerData = async (id: string, month: number, year: number, forceSync = false, scope = selectedScope) => {
     setLoading(!forceSync);
     setIsSyncing(forceSync);
     setIsSaved(false);
@@ -76,42 +146,35 @@ export default function DailyLedgerReport() {
 
     try {
       // 1. Check if an official snapshot already exists for Daily Ledger
-      const { data: snapshot } = await (supabase as any)
+      const { data: snapshot } = await supabase
         .from('monthly_reports')
         .select('*')
         .eq('teacher_id', id)
         .eq('report_month', month)
         .eq('report_year', year)
+        .eq('standard_group', scope)
+        .returns<MonthlyReportSnapshot[]>()
         .maybeSingle();
 
-      // 2. Fetch Profile Info
-      const { data: profile } = await (supabase as any)
-        .from('profiles')
-        .select('school_name_mr, center_name_mr, taluka_mr, district_mr, has_primary, has_upper_primary')
-        .eq('id', id)
-        .maybeSingle();
-
-      if (profile) {
-        setSchoolName(profile.school_name_mr || '');
-        setCenterName(profile.center_name_mr || '');
-        setHasPrimary(profile.has_primary ?? true);
-        setHasUpperPrimary(profile.has_upper_primary ?? true);
-      }
+      // 2. Fetch Profile Info (Already handled by fetchProfile(id) on mount/refresh)
 
       // 2b. Fetch Enrollment
-      const { data: enrollment } = await (supabase as any)
+      const { data: enrollment } = await supabase
         .from('student_enrollment')
         .select('std_1,std_2,std_3,std_4,std_5,std_6,std_7,std_8')
         .eq('teacher_id', id)
         .maybeSingle();
       if (enrollment) {
-        const total = ['std_1', 'std_2', 'std_3', 'std_4', 'std_5', 'std_6', 'std_7', 'std_8']
-          .reduce((sum, k) => sum + (Number(enrollment[k]) || 0), 0);
-        setTotalEnrollment(total);
+        const primaryKeys = ['std_1', 'std_2', 'std_3', 'std_4', 'std_5'];
+        const upperKeys = ['std_6', 'std_7', 'std_8'];
+        const relevantKeys = scope === 'primary' ? primaryKeys : upperKeys;
+        
+        const scopedTotal = relevantKeys.reduce((sum, key) => sum + (Number(enrollment[key]) || 0), 0);
+        setTotalEnrollment(scopedTotal);
       }
 
       // 3. Fetch Menu Master strictly for column mapping
-      const { data: menuMaster } = await (supabase as any)
+      const { data: menuMaster } = await supabase
         .from('menu_master')
         .select('*')
         .eq('teacher_id', id)
@@ -145,12 +208,14 @@ export default function DailyLedgerReport() {
       const nextMonthStart = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
 
       // B. Opening Balances (From previous month report_data snapshot if exists)
-      const { data: prevSnapshot } = await (supabase as any)
+      const { data: prevSnapshot } = await supabase
         .from('monthly_reports')
         .select('report_data')
         .eq('teacher_id', id)
         .eq('report_month', prevMonth)
         .eq('report_year', prevYear)
+        .eq('standard_group', scope)
+        .returns<MonthlyReportSnapshot[]>()
         .maybeSingle();
 
       const openingBalances: Record<string, number> = {};
@@ -163,8 +228,8 @@ export default function DailyLedgerReport() {
         // FALLBACK: Time-Travel Historical Reconstruction
         console.log("No previous snapshot found. Reconstructing opening balances historically...");
         const [histReceipts, histConsumption] = await Promise.all([
-          (supabase as any).from('stock_receipts').select('item_name, quantity_kg').eq('teacher_id', id).lt('receipt_date', currentMonthStart),
-          (supabase as any).from('consumption_logs').select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used').eq('teacher_id', id).lt('log_date', currentMonthStart)
+          supabase.from('stock_receipts').select('item_name, quantity_kg').eq('teacher_id', id).eq('standard_group', scope).lt('receipt_date', currentMonthStart),
+          supabase.from('consumption_logs').select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used').eq('teacher_id', id).eq('standard_group', scope).lt('log_date', currentMonthStart)
         ]);
 
         (histReceipts.data || []).forEach((r: any) => {
@@ -179,7 +244,9 @@ export default function DailyLedgerReport() {
           usedItems.forEach((itemName: any) => {
             const itemMaster = items.find((m: any) => m.item_name === itemName);
             if (itemMaster) {
-              const consumedKg = ((pAtt * Number(itemMaster.grams_primary || 0)) + (uAtt * Number(itemMaster.grams_upper_primary || 0))) / 1000;
+              const grams = scope === 'primary' ? Number(itemMaster.grams_primary || 0) : Number(itemMaster.grams_upper_primary || 0);
+              const att = scope === 'primary' ? pAtt : uAtt;
+              const consumedKg = (att * grams) / 1000;
               openingBalances[itemName] = (openingBalances[itemName] || 0) - consumedKg;
             }
           });
@@ -187,10 +254,11 @@ export default function DailyLedgerReport() {
       }
 
       // C. Stock Receipts (Received)
-      const { data: receipts } = await (supabase as any)
+      const { data: receipts } = await supabase
         .from('stock_receipts')
         .select('*')
         .eq('teacher_id', id)
+        .eq('standard_group', scope)
         .gte('receipt_date', currentMonthStart)
         .lt('receipt_date', nextMonthStart);
 
@@ -200,7 +268,7 @@ export default function DailyLedgerReport() {
       });
 
       // D. Menu Weekly Schedule
-      const { data: weeklySchedule } = await (supabase as any)
+      const { data: weeklySchedule } = await supabase
         .from('menu_weekly_schedule')
         .select('*')
         .eq('teacher_id', id);
@@ -208,13 +276,20 @@ export default function DailyLedgerReport() {
       const scheduleOptions: ScheduleRow[] = weeklySchedule || [];
 
       // E. Daily Logs & Consumption Details
-      const [logsRes, consumptionRes] = await Promise.all([
-        (supabase as any).from('daily_logs').select('*').eq('teacher_id', id).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart),
-        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', id).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart)
+      const [logsRes, consumptionRes, staffRes, fuelRes] = await Promise.all([
+        supabase.from('daily_logs').select('*').eq('teacher_id', id).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart),
+        supabase.from('consumption_logs').select('*').eq('teacher_id', id).eq('standard_group', scope).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart),
+        supabase.from('cooking_staff').select('*').eq('teacher_id', id).eq('standard_group', scope),
+        supabase.from('fuel_tracking').select('*').eq('teacher_id', id).eq('standard_group', scope)
       ]);
 
-      const logs = logsRes.data || [];
-      const consumptionLogs = consumptionRes.data || [];
+      const logs = (logsRes.data as DailyLog[]) || [];
+      const consumptionLogs = (consumptionRes.data as ConsumptionLog[]) || [];
+      const activeStaff = (staffRes.data as CookingStaff[]) || [];
+      const activeFuel = (fuelRes.data as FuelTracking[]) || [];
+
+      // Calculate days served for legacy pro-rating
+      const daysServed = logs.filter((l: any) => (Number(l.meals_served_primary) || 0) > 0 || (Number(l.meals_served_upper_primary) || 0) > 0).length;
 
       const logsMap = new Map();
       logs.forEach((l: any) => logsMap.set(l.log_date, l));
@@ -229,7 +304,9 @@ export default function DailyLedgerReport() {
 
       let totalAttP = 0;
       let totalAttU = 0;
-      const totalHonorarium = 0; // Keeping static 0 for now as per math
+      let totalHonorarium = 0;
+      let totalFuel = 0;
+      let totalVeg = 0;
 
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -265,10 +342,10 @@ export default function DailyLedgerReport() {
           const pAtt = Number(log.meals_served_primary) || 0;
           const uAtt = Number(log.meals_served_upper_primary) || 0;
 
-          rowData.primaryAtt = pAtt;
-          rowData.upperAtt = uAtt;
-          totalAttP += pAtt;
-          totalAttU += uAtt;
+          rowData.primaryAtt = scope === 'primary' ? pAtt : 0;
+          rowData.upperAtt = scope === 'upper_primary' ? uAtt : 0;
+          if (scope === 'primary') totalAttP += pAtt;
+          else totalAttU += uAtt;
 
           if (log.is_holiday) {
             rowData.menuName = `सुट्टी: ${log.holiday_remarks || 'National Holiday'}`;
@@ -288,7 +365,7 @@ export default function DailyLedgerReport() {
                 if (isIncluded && (pAtt > 0 || uAtt > 0)) {
                   const gramsP = Number(item.grams_primary) || 0;
                   const gramsU = Number(item.grams_upper_primary) || 0;
-                  const consumedKg = ((pAtt * gramsP) + (uAtt * gramsU)) / 1000;
+                  const consumedKg = (scope === 'primary' ? pAtt * gramsP : uAtt * gramsU) / 1000;
 
                   rowData.consumptions[item.item_code] = consumedKg.toFixed(3);
                   itemTotals[item.item_code] = (itemTotals[item.item_code] || 0) + consumedKg;
@@ -309,7 +386,7 @@ export default function DailyLedgerReport() {
                 if (isIncluded && (pAtt > 0 || uAtt > 0)) {
                   const gramsP = Number(item.grams_primary) || 0;
                   const gramsU = Number(item.grams_upper_primary) || 0;
-                  const consumedKg = ((pAtt * gramsP) + (uAtt * gramsU)) / 1000;
+                  const consumedKg = (scope === 'primary' ? pAtt * gramsP : uAtt * gramsU) / 1000;
 
                   rowData.consumptions[item.item_code] = consumedKg.toFixed(3);
                   itemTotals[item.item_code] = (itemTotals[item.item_code] || 0) + consumedKg;
@@ -326,7 +403,47 @@ export default function DailyLedgerReport() {
           });
         }
 
-        dailyRows.push(rowData);
+        // F. Calculate Dynamic Expenditures for this day
+        let dailyHonorarium = 0;
+        let dailyFuel = 0;
+        let dailyVeg = 0;
+
+        const totalDayAtt = rowData.primaryAtt + rowData.upperAtt;
+        if (totalDayAtt > 0) {
+          // 1. Staff Honorarium
+          activeStaff.forEach((staff: any) => {
+            const rate = scope === 'primary' ? Number(staff.rate_primary || 0) : Number(staff.rate_upper || 0);
+            if (staff.payment_type === 'per_student') {
+              dailyHonorarium += rate * totalDayAtt;
+            } else if (staff.payment_type === 'per_day') {
+              dailyHonorarium += rate;
+            }
+          });
+
+          // 2. Fuel & Vegetables
+          activeFuel.forEach((fuel: any) => {
+            const fRate = scope === 'primary' ? Number(fuel.fuel_rate_primary || 0) : Number(fuel.fuel_rate_upper || 0);
+            const vRate = scope === 'primary' ? Number(fuel.veg_rate_primary || 0) : Number(fuel.veg_rate_upper || 0);
+            
+            if (fRate > 0 || vRate > 0) {
+              dailyFuel += (fRate * totalDayAtt);
+              dailyVeg += (vRate * totalDayAtt);
+            } else {
+              // Legacy support (Pro-rated daily)
+              dailyFuel += Number(fuel.monthly_cost || 0) / (daysServed || 20);
+            }
+          });
+        }
+        
+        rowData.honorarium = Number(dailyHonorarium.toFixed(2));
+        rowData.fuelCost = Number(dailyFuel.toFixed(2));
+        rowData.vegCost = Number(dailyVeg.toFixed(2));
+
+        totalHonorarium += dailyHonorarium;
+        totalFuel += dailyFuel;
+        totalVeg += dailyVeg;
+
+        dailyRows.push(rowData as DailyRow);
       }
 
       // Format Header Summaries
@@ -358,7 +475,9 @@ export default function DailyLedgerReport() {
         footerTotals: {
           primaryAtt: totalAttP,
           upperAtt: totalAttU,
-          honorarium: totalHonorarium,
+          totalHonorarium: totalHonorarium,
+          totalFuel: totalFuel,
+          totalVeg: totalVeg,
           consumptions: footerTotalsRow
         }
       });
@@ -380,23 +499,30 @@ export default function DailyLedgerReport() {
         teacher_id: userId,
         report_month: selectedMonth,
         report_year: selectedYear,
+        standard_group: selectedScope,
         daily_ledger_data: JSON.stringify(ledgerData)
       };
 
-      const { data: existing } = await (supabase as any)
+      const { data: existing } = await supabase
         .from('monthly_reports')
         .select('id')
         .eq('teacher_id', userId)
         .eq('report_month', selectedMonth)
         .eq('report_year', selectedYear)
+        .eq('standard_group', selectedScope)
+        .returns<MonthlyReportSnapshot[]>()
         .maybeSingle();
 
       let err;
       if (existing) {
-        const res = await (supabase as any).from('monthly_reports').update(payload).eq('id', existing.id);
+        const res = await (supabase
+          .from('monthly_reports') as any)
+          .update(payload)
+          .eq('id', (existing as any).id)
+          .eq('teacher_id', userId);
         err = res.error;
       } else {
-        const res = await (supabase as any).from('monthly_reports').insert([payload]);
+        const res = await (supabase.from('monthly_reports') as any).insert([payload]);
         err = res.error;
       }
 
@@ -415,69 +541,90 @@ export default function DailyLedgerReport() {
 
   return (
     <Layout>
-      <div className="mx-auto mt-4 pb-20 print:p-0 print:m-0 print:max-w-full print:bg-white w-full lg:max-w-[95vw]">
-
-        {/* High-Tech Mobile Filter Bar */}
-        <div className="mb-6 mx-auto w-full lg:max-w-4xl print:hidden">
-          <div className="bg-white/80 backdrop-blur-xl p-5 md:p-8 rounded-3xl md:rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.05)] border border-white flex flex-col md:flex-row gap-6 items-center justify-between">
-            <div className="flex items-center gap-3 w-full md:w-auto">
-              <div className="bg-blue-600 p-3 rounded-2xl text-white shadow-lg shadow-blue-200">
-                <FileText size={24} />
-              </div>
-              <div>
-                <h2 className="text-lg font-black text-slate-800 uppercase tracking-tighter leading-none italic">Daily Ledger</h2>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Official Snapshot Engine</p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-center">
-              <div className="flex bg-slate-100/50 p-1.5 rounded-2xl border border-slate-100 w-full min-[400px]:w-auto">
-                <select
-                  value={selectedMonth}
-                  onChange={e => setSelectedMonth(Number(e.target.value))}
-                  className="bg-transparent px-4 py-2 font-black text-xs md:text-sm text-slate-700 outline-none min-w-[100px]"
-                  title="महिना निवडा (Select Month)"
-                >
-                  {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-                </select>
-                <div className="w-[1.5px] h-6 bg-slate-200 my-auto" />
-                <select
-                  value={selectedYear}
-                  onChange={e => setSelectedYear(Number(e.target.value))}
-                  className="bg-transparent px-4 py-2 font-black text-xs md:text-sm text-slate-700 outline-none min-w-[80px]"
-                  title="वर्ष निवडा (Select Year)"
-                >
-                  {years.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
+      <div className="mx-auto mt-4 pb-20 print:p-0 print:m-0 print:max-w-full print:bg-white w-full lg:max-w-[95vw] print:h-auto print:overflow-visible print:block">
+        {/* Optimized Control Bar */}
+        <div className="mb-6 mx-auto w-full lg:max-w-6xl print:hidden">
+          <div className="bg-white/80 backdrop-blur-xl p-5 md:p-6 rounded-3xl md:rounded-[32px] shadow-[0_20px_50px_rgba(0,0,0,0.05)] border border-white">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-600 p-2.5 rounded-2xl text-white shadow-lg shadow-blue-200">
+                  <FileText size={20} />
+                </div>
+                <div>
+                  <h2 className="text-base font-black text-slate-800 uppercase tracking-tighter leading-none">Daily Ledger</h2>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Inventory Management System</p>
+                </div>
               </div>
 
-              <div className="flex gap-2 w-full min-[400px]:w-auto">
-                <button
-                  onClick={() => fetchLedgerData(userId!, selectedMonth, selectedYear, true)}
-                  disabled={loading || isSyncing}
-                  className="flex-1 bg-white border border-slate-200 text-slate-600 p-3 rounded-2xl hover:bg-slate-50 transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
-                  title="Sync Live Data"
-                >
-                  {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                  <span className="md:hidden lg:inline text-[10px] font-black uppercase">Sync</span>
-                </button>
-
-                {!isSaved ? (
-                  <button
-                    onClick={handleSave}
-                    disabled={loading || !ledgerData}
-                    className="flex-[2] bg-blue-600 text-white px-6 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200 active:scale-95 disabled:opacity-50"
+              <div className="flex flex-wrap items-center gap-3 justify-start md:justify-end">
+                {/* Month/Year Selectors */}
+                <div className="flex bg-slate-100/50 p-1 rounded-xl border border-slate-100 items-center">
+                  <select
+                    value={selectedMonth}
+                    onChange={e => setSelectedMonth(Number(e.target.value))}
+                    className="bg-transparent px-3 py-1.5 font-bold text-xs text-slate-700 outline-none w-32"
+                    title="महिना निवडा (Select Month)"
                   >
-                    {loading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />} Save Record
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handlePrint()}
-                    className="flex-[2] bg-slate-900 text-white px-6 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 hover:bg-slate-800"
+                    {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                  </select>
+                  <div className="w-[1px] h-4 bg-slate-300 mx-0.5" />
+                  <select
+                    value={selectedYear}
+                    onChange={e => setSelectedYear(Number(e.target.value))}
+                    className="bg-transparent px-3 py-1.5 font-bold text-xs text-slate-700 outline-none w-20"
+                    title="वर्ष निवडा (Select Year)"
                   >
-                    <Printer size={18} /> Print Register (PDF)
-                  </button>
+                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+
+                {/* Scope Toggle */}
+                {hasPrimary && hasUpperPrimary && (
+                  <div className="flex bg-slate-100/80 p-1 rounded-xl border border-slate-200 shadow-inner">
+                    <button 
+                      onClick={() => setSelectedScope('primary')}
+                      className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${selectedScope === 'primary' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-slate-400 hover:text-slate-600'}`}
+                    >
+                      I-V
+                    </button>
+                    <button 
+                      onClick={() => setSelectedScope('upper_primary')}
+                      className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${selectedScope === 'upper_primary' ? 'bg-white text-purple-600 shadow-sm border border-purple-100' : 'text-slate-400 hover:text-slate-600'}`}
+                    >
+                      VI-VIII
+                    </button>
+                  </div>
                 )}
+
+                {/* Actions */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => fetchLedgerData(userId!, selectedMonth, selectedYear, true)}
+                    disabled={loading || isSyncing}
+                    className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 shadow-sm"
+                    title="Sync Live Data"
+                  >
+                    {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    <span className="text-[10px] font-black uppercase tracking-wider">Sync</span>
+                  </button>
+
+                  {!isSaved ? (
+                    <button
+                      onClick={handleSave}
+                      disabled={loading || !ledgerData}
+                      className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-100 active:scale-95 disabled:opacity-50"
+                    >
+                      {loading ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />} Save Record
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handlePrint}
+                      className="px-6 py-2.5 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95"
+                    >
+                      <Printer size={14} /> Print Register
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -525,11 +672,13 @@ export default function DailyLedgerReport() {
               <p className="font-bold text-slate-400 animate-pulse text-sm">कॅल्क्युलेशन सुरू आहे...</p>
             </div>
           ) : ledgerData && menuItems.length > 0 ? (
-            <div className="w-full overflow-x-auto print:overflow-visible pb-10 custom-scrollbar">
-              <div ref={printRef} className="print-content w-full min-w-[1200px] print:min-w-0 mx-auto">
+            <div className="w-full overflow-x-auto print:overflow-x-visible pb-10 custom-scrollbar print:h-auto print:overflow-visible print:block">
+              <div ref={printRef} className="print-content w-full min-w-[1200px] print:min-w-0 mx-auto print:block print:h-auto print:overflow-visible">
                 <div className="bg-white print:border-none border-2 border-slate-200 shadow-md p-8 print:p-0 w-full relative">
                   <div className="text-center mb-4 print:mb-3 border-b-2 border-black pb-3">
-                    <h1 className="text-xl md:text-2xl font-black mb-1.5 uppercase tracking-wide">प्रतिदिन शिजवलेल्या अन्नधान्याची खतावणी</h1>
+                    <h1 className="text-xl md:text-2xl font-black mb-1.5 uppercase tracking-wide">
+                      प्रतिदिन शिजवलेल्या अन्नधान्याची खतावणी {selectedScope === 'primary' ? '(इ. १ ते ५ वी)' : '(इ. ६ ते ८ वी)'}
+                    </h1>
                     <h2 className="text-sm font-extrabold text-gray-800 leading-relaxed">
                       शाळेचे नाव: <span className="underline decoration-dotted underline-offset-4">{schoolName || '____________________'}</span>
                       <span className="mx-3">|</span>
@@ -557,31 +706,26 @@ export default function DailyLedgerReport() {
                   </div>
 
                   <div className="w-full pb-10">
-                    <table className="w-full border-collapse border border-slate-800 table-fixed text-[11px] print:text-[9px]">
+                    <table className="w-full border-collapse border border-slate-800 text-[11px] print:text-[9px]">
                       <thead>
                         <tr className="bg-gray-100 print:bg-transparent">
-                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap min-w-[45px]" rowSpan={2}>दिनांक</th>
-                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap min-w-[60px]" rowSpan={2}>वार</th>
-                          <th className="border border-black print:border-[1px] p-2 text-center text-[10px] leading-tight min-w-[100px]" rowSpan={2}>मेनूचा प्रकार</th>
-                          {(hasPrimary || hasUpperPrimary) && (
-                            <th className="border border-black print:border-[1px] p-2 text-center" colSpan={(hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)}>उपस्थिती (पट)</th>
-                          )}
+                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap min-w-[45px]">दिनांक</th>
+                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap min-w-[60px]">वार</th>
+                          <th className="border border-black print:border-[1px] p-2 text-center text-[10px] leading-tight min-w-[100px]">मेनूचा प्रकार</th>
+                          <th className="border border-black print:border-[1px] p-2 text-center">उपस्थिती ({selectedScope === 'primary' ? '१-५' : '६-८'})</th>
                           {menuItems.map(m => (
                             <th
                               key={m.item_code}
                               className="border border-slate-800 p-0.5 text-center font-bold text-[9px] leading-tight whitespace-normal break-words align-middle"
                               style={{ minWidth: '35px' }}
                               title={m.item_name}
-                              rowSpan={2}
                             >
                               {m.item_name}
                             </th>
                           ))}
-                          <th className="border border-black print:border-[1px] p-2 text-center w-20" rowSpan={2}>मानधन</th>
-                        </tr>
-                        <tr className="bg-gray-100 print:bg-transparent">
-                          {hasPrimary && <th className="border border-black print:border-[1px] p-1 text-center bg-gray-50/50 print:bg-transparent text-[9px]">१-५</th>}
-                          {hasUpperPrimary && <th className="border border-black print:border-[1px] p-1 text-center bg-gray-50/50 print:bg-transparent text-[9px]">६-८</th>}
+                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap px-3">मानधन</th>
+                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap px-3">इंधन</th>
+                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap px-3">भाजीपाला</th>
                         </tr>
                       </thead>
 
@@ -589,81 +733,90 @@ export default function DailyLedgerReport() {
                         {/* Opening States */}
                         <>
                           <tr className="bg-yellow-50/30 print:bg-transparent font-bold">
-                            <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)}>१) मागील शिल्लक (Opening)</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={4}>१) मागील शिल्लक (Opening)</td>
                             {menuItems.map(m => (
                               <td key={'op_' + m.item_code} className="border border-black print:border-[1px] p-1.5 text-right font-mono">
                                 {Number(ledgerData.topSummaries.opening[m.item_code]) === 0 ? '-' : ledgerData.topSummaries.opening[m.item_code]}
                               </td>
                             ))}
                             <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                           </tr>
                           <tr className="bg-blue-50/30 print:bg-transparent font-bold">
-                            <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)}>२) प्राप्त (Received)</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={4}>२) प्राप्त (Received)</td>
                             {menuItems.map(m => (
                               <td key={'rec_' + m.item_code} className="border border-black print:border-[1px] p-1.5 text-right font-mono">
                                 {Number(ledgerData.topSummaries.received[m.item_code]) === 0 ? '-' : ledgerData.topSummaries.received[m.item_code]}
                               </td>
                             ))}
                             <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                           </tr>
                           <tr className="bg-gray-200/50 print:bg-transparent font-black">
-                            <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)}>३) एकूण (Total = 1+2)</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={4}>३) एकूण (Total = 1+2)</td>
                             {menuItems.map(m => (
                               <td key={'tot_' + m.item_code} className="border border-black print:border-[1px] p-1.5 text-right font-mono">
                                 {Number(ledgerData.topSummaries.total[m.item_code]) === 0 ? '-' : ledgerData.topSummaries.total[m.item_code]}
                               </td>
                             ))}
                             <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
+                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                           </tr>
                           <tr>
-                            <td colSpan={6 + menuItems.length} className="border-x border-black print:border-x-[1px] h-1 bg-black/10 print:bg-transparent"></td>
+                            <td colSpan={5 + menuItems.length} className="border-x border-black print:border-x-[1px] h-1 bg-black/10 print:bg-transparent"></td>
                           </tr>
                         </>
 
                         {ledgerData.dailyRows.map((row: any, idx: number) => (
-                          <tr key={idx} className="hover:bg-slate-50 print:hover:bg-transparent transition-colors">
+                          <tr key={idx} className="hover:bg-slate-50 print:hover:bg-transparent transition-colors print:break-inside-avoid">
                             <td className="border border-black print:border-[1px] p-1.5 whitespace-nowrap min-w-[45px] font-bold text-center">{String(idx + 1).padStart(2, '0')}</td>
                             <td className="border border-black print:border-[1px] p-1.5 text-center whitespace-nowrap min-w-[60px] tracking-tighter">{row.marathiDayName}</td>
                             <td className="border border-black print:border-[1px] p-1.5 text-[10px] leading-tight min-w-[100px] break-words" title={row.menuName}>{row.menuName || '-'}</td>
-                            {hasPrimary && <td className="border border-black print:border-[1px] p-1.5 text-center font-bold">{row.primaryAtt > 0 ? row.primaryAtt : '-'}</td>}
-                            {hasUpperPrimary && <td className="border border-black print:border-[1px] p-1.5 text-center font-bold">{row.upperAtt > 0 ? row.upperAtt : '-'}</td>}
+                            <td className="border border-black print:border-[1px] p-1.5 text-center font-bold">
+                              {selectedScope === 'primary' ? (row.primaryAtt > 0 ? row.primaryAtt : '-') : (row.upperAtt > 0 ? row.upperAtt : '-')}
+                            </td>
                             {menuItems.map(m => (
                               <td key={row.date + '_' + m.item_code} className={`border border-black print:border-[1px] p-1.5 text-right font-mono ${Number(row.consumptions[m.item_code]) === 0 ? 'text-gray-300 print:text-gray-400' : 'text-slate-800 font-bold'}`}>
                                 {Number(row.consumptions[m.item_code]) === 0 ? '-' : row.consumptions[m.item_code]}
                               </td>
                             ))}
-                            <td className="border border-black print:border-[1px] p-1.5 text-right text-gray-400">-</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-bold">
+                              {Number(row.honorarium || 0) === 0 ? '-' : `₹${Number(row.honorarium).toFixed(2)}`}
+                            </td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-bold">
+                              {Number(row.fuelCost || 0) === 0 ? '-' : `₹${Number(row.fuelCost).toFixed(2)}`}
+                            </td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-bold">
+                              {Number(row.vegCost || 0) === 0 ? '-' : `₹${Number(row.vegCost).toFixed(2)}`}
+                            </td>
                           </tr>
                         ))}
 
                         {/* Totals */}
                         <>
+                          {/* Unified Grand Total Row */}
                           <tr className="bg-[#474379]/10 print:bg-transparent border-t-[3px] border-black">
                             <td className="border border-black print:border-[1px] p-2 text-center font-black uppercase tracking-wider" colSpan={3}>
-                              एकूण उपस्थिती (Total Attendance)
+                              एकूण (GRAND TOTAL)
                             </td>
-                            {hasPrimary && <td className="border border-black print:border-[1px] p-2 text-center font-black bg-blue-50/50 print:bg-transparent">{ledgerData.footerTotals.primaryAtt}</td>}
-                            {hasUpperPrimary && <td className="border border-black print:border-[1px] p-2 text-center font-black bg-blue-50/50 print:bg-transparent">{ledgerData.footerTotals.upperAtt}</td>}
-                            <td className="border border-black print:border-[1px] p-2 text-center font-black text-indigo-700 print:text-black" colSpan={menuItems.length + 1}>
-                              सर्व एकूण उपस्थिती: {ledgerData.footerTotals.primaryAtt + ledgerData.footerTotals.upperAtt}
-                            </td>
-                          </tr>
-
-
-                          <tr className="bg-[#474379]/5 print:bg-transparent">
-                            <td className="border border-black print:border-[1px] p-2 text-center font-black uppercase tracking-wider" colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)}>
-                              एकूण शिजवले (Total Consumption)
+                            <td className="border border-black print:border-[1px] p-2 text-center font-black bg-blue-50/50 print:bg-transparent">
+                              {selectedScope === 'primary' ? ledgerData.footerTotals.primaryAtt : ledgerData.footerTotals.upperAtt}
                             </td>
                             {menuItems.map(m => (
-                              <td key={'foot_' + m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black shadow-inner">
+                              <td key={'footer_' + m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black text-[10px]">
                                 {Number(ledgerData.footerTotals.consumptions[m.item_code]) === 0 ? '-' : ledgerData.footerTotals.consumptions[m.item_code]}
                               </td>
                             ))}
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-black">₹{Number(ledgerData.footerTotals.totalHonorarium || 0).toFixed(2)}</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-black">₹{Number(ledgerData.footerTotals.totalFuel || 0).toFixed(2)}</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-black">₹{Number(ledgerData.footerTotals.totalVeg || 0).toFixed(2)}</td>
                           </tr>
 
                           <tr className="bg-amber-50/50 print:bg-transparent font-black text-xs print:text-[10px]">
-                            <td className="border border-black print:border-[1px] p-2 text-center text-amber-700 print:text-black tracking-widest" colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)}>
+                            <td className="border border-black print:border-[1px] p-2 text-center text-amber-700 print:text-black tracking-widest" colSpan={4}>
                               ४) उसणे घेतलेले धान्य (Borrowed Stock)
                             </td>
                             {menuItems.map(m => {
@@ -677,10 +830,12 @@ export default function DailyLedgerReport() {
                               )
                             })}
                             <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                           </tr>
 
                           <tr className="bg-gray-100 print:bg-transparent font-black text-xs print:text-[10px]">
-                            <td className="border border-black print:border-[1px] p-2 text-center text-red-600 print:text-black tracking-widest" colSpan={3 + (hasPrimary ? 1 : 0) + (hasUpperPrimary ? 1 : 0)}>
+                            <td className="border border-black print:border-[1px] p-2 text-center text-red-600 print:text-black tracking-widest" colSpan={4}>
                               ५) अखेर शिल्लक (Closing Balance)
                             </td>
                             {menuItems.map(m => {
@@ -694,12 +849,13 @@ export default function DailyLedgerReport() {
                               )
                             })}
                             <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
+                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                           </tr>
                         </>
                       </tbody>
                     </table>
                   </div>
-
                   <div className="mt-12 mb-4 flex justify-between px-10 print:px-4 items-end">
                     <div className="text-center font-bold text-xs uppercase">
                       <div className="border-b-[1.5px] border-black w-40 mb-2"></div>
@@ -726,7 +882,6 @@ export default function DailyLedgerReport() {
             </div>
           )}
         </div>
-
       </div>
     </Layout>
   );

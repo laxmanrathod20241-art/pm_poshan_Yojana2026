@@ -480,8 +480,8 @@ export default function TeacherDashboard() {
             </div>
 
             {isLogModalOpen && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/70 backdrop-blur-xl p-3 md:p-6">
-                 <div className="w-full max-w-4xl h-[95vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200 no-scrollbar rounded-3xl">
+              <div className="fixed inset-0 z-[100] flex justify-center items-start bg-slate-950/70 backdrop-blur-xl overflow-y-auto pt-24 pb-12 px-2 sm:px-4 no-scrollbar">
+                 <div className="w-full max-w-4xl animate-in fade-in zoom-in-95 duration-200 rounded-3xl">
                     <DailyLogForm 
                       targetDate={selectedLogDate} 
                       onClose={() => setIsLogModalOpen(false)} 

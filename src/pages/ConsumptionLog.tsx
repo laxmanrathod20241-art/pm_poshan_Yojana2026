@@ -1,8 +1,8 @@
-// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { calculateConsumedKg } from '../utils/inventoryUtils';
 import Layout from '../components/Layout';
+import type { Database } from '../types/database.types';
 import {
   Calculator,
   CheckCircle2,
@@ -14,6 +14,17 @@ import {
   Trash2
 } from 'lucide-react';
 
+type InventoryStock = Database['public']['Tables']['inventory_stock']['Row'];
+type MenuItemMaster = Database['public']['Tables']['menu_master']['Row'];
+type ConsumptionLogEntry = Database['public']['Tables']['consumption_logs']['Row'];
+type MenuSchedule = Database['public']['Tables']['menu_weekly_schedule']['Row'];
+type EnrollmentEntity = Database['public']['Tables']['student_enrollment']['Row'];
+
+interface MenuTemplate {
+  mainFoods: string[];
+  ingredients: string[];
+}
+
 export default function ConsumptionLog() {
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -21,15 +32,15 @@ export default function ConsumptionLog() {
   const [upperCount, setUpperCount] = useState<number | ''>('');
   
   // Master Data & Template Logic
-  const [masterMainFoods, setMasterMainFoods] = useState<any[]>([]);
-  const [masterIngredients, setMasterIngredients] = useState<any[]>([]);
-  const [scheduledMenu, setScheduledMenu] = useState<{ mainFoods: string[], ingredients: string[] } | null>(null);
+  const [masterMainFoods, setMasterMainFoods] = useState<MenuItemMaster[]>([]);
+  const [masterIngredients, setMasterIngredients] = useState<MenuItemMaster[]>([]);
+  const [scheduledMenu, setScheduledMenu] = useState<MenuTemplate | null>(null);
   
   // Form State (The Override Layer)
   const [localMainFoods, setLocalMainFoods] = useState<string[]>([]);
   const [localIngredients, setLocalIngredients] = useState<string[]>([]);
   
-  const [inventory, setInventory] = useState<any[]>([]);
+  const [inventory, setInventory] = useState<InventoryStock[]>([]);
   const [status, setStatus] = useState({ type: '', text: '' });
   
   // Borrowed Stock States
@@ -70,10 +81,10 @@ export default function ConsumptionLog() {
       const scheduleType = weekNumber % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
 
       const [menuRes, masterRes, enrollmentRes, existingRes] = await Promise.all([
-        (supabase as any).from('menu_weekly_schedule').select('*').eq('teacher_id', userId).eq('day_name', stringDay).eq('week_pattern', scheduleType).eq('is_active', true).maybeSingle(),
-        (supabase as any).from('menu_master').select('item_code, item_name, item_category').eq('teacher_id', userId),
-        (supabase as any).from('student_enrollment').select('*').eq('teacher_id', userId).maybeSingle(),
-        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).maybeSingle()
+        supabase.from('menu_weekly_schedule').select('*').eq('teacher_id', userId).eq('day_name', stringDay).eq('week_pattern', scheduleType).eq('is_active', true).returns<MenuSchedule[]>().maybeSingle(),
+        supabase.from('menu_master').select('item_code, item_name, item_category').eq('teacher_id', userId).returns<MenuItemMaster[]>(),
+        supabase.from('student_enrollment').select('*').eq('teacher_id', userId).returns<EnrollmentEntity[]>().maybeSingle(),
+        supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).returns<ConsumptionLogEntry[]>().maybeSingle()
       ]);
 
       if (masterRes.data) {
@@ -115,7 +126,7 @@ export default function ConsumptionLog() {
         setLocalIngredients(template.ingredients);
       }
 
-      const { data: stock } = await (supabase as any).from('inventory_stock').select('*').eq('teacher_id', userId);
+      const { data: stock } = await supabase.from('inventory_stock').select('*').eq('teacher_id', userId).returns<InventoryStock[]>();
       setInventory(stock || []);
     } catch (err: any) {
       console.error('Fetch Error:', err);
@@ -216,8 +227,8 @@ export default function ConsumptionLog() {
       const todayStr = new Date().toISOString().split('T')[0];
 
       const [oldConsumptionRes, existingDailyRes] = await Promise.all([
-        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).maybeSingle(),
-        (supabase as any).from('daily_logs').select('id, is_holiday').eq('teacher_id', userId).eq('log_date', todayStr).maybeSingle()
+        supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).returns<ConsumptionLogEntry[]>().maybeSingle(),
+        supabase.from('daily_logs').select('id, is_holiday').eq('teacher_id', userId).eq('log_date', todayStr).returns<any[]>().maybeSingle()
       ]);
 
       const oldConsumption = oldConsumptionRes.data;
@@ -238,7 +249,7 @@ export default function ConsumptionLog() {
             const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
             if (currentStock) {
               const restoredBalance = Number(currentStock.current_balance) + restoreKg;
-              const { error: rErr } = await (supabase as any).from('inventory_stock').update({ current_balance: restoredBalance }).eq('id', currentStock.id);
+              const { error: rErr } = await (supabase.from('inventory_stock') as any).update({ current_balance: restoredBalance }).eq('id', currentStock.id).eq('teacher_id', userId);
               if (rErr) throw new Error("Stock Restoration Failed: " + rErr.message);
               currentStock.current_balance = restoredBalance;
             }
@@ -253,7 +264,7 @@ export default function ConsumptionLog() {
           const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
           if (currentStock) {
             const newBalance = Number(currentStock.current_balance) - deductKg;
-            const { error: dErr } = await (supabase as any).from('inventory_stock').update({ current_balance: newBalance }).eq('id', currentStock.id);
+            const { error: dErr } = await (supabase.from('inventory_stock') as any).update({ current_balance: newBalance }).eq('id', currentStock.id).eq('teacher_id', userId);
             if (dErr) throw new Error("Stock Deduction Failed: " + dErr.message);
             currentStock.current_balance = newBalance;
           }
@@ -269,10 +280,10 @@ export default function ConsumptionLog() {
       };
 
       if (verifiedDailyId) {
-        const { error: uErr } = await (supabase as any).from('daily_logs').update(dailyPayload).eq('id', verifiedDailyId);
+        const { error: uErr } = await (supabase.from('daily_logs') as any).update(dailyPayload).eq('id', verifiedDailyId).eq('teacher_id', userId);
         if (uErr) throw new Error("Attendance Update Failed: " + uErr.message);
       } else {
-        const { error: iErr } = await (supabase as any).from('daily_logs').insert([dailyPayload]);
+        const { error: iErr } = await (supabase.from('daily_logs') as any).insert([dailyPayload]);
         if (iErr) throw new Error("Attendance Submission Failed: " + iErr.message);
       }
 
@@ -289,10 +300,10 @@ export default function ConsumptionLog() {
       };
 
       if (oldConsumption) {
-        const { error: cErr } = await (supabase as any).from('consumption_logs').update(consumptionPayload).eq('id', oldConsumption.id);
+        const { error: cErr } = await (supabase.from('consumption_logs') as any).update(consumptionPayload).eq('id', oldConsumption.id).eq('teacher_id', userId);
         if (cErr) throw new Error("Menu Update Failed: " + cErr.message);
       } else {
-        const { error: cErr } = await (supabase as any).from('consumption_logs').insert([consumptionPayload]);
+        const { error: cErr } = await (supabase.from('consumption_logs') as any).insert([consumptionPayload]);
         if (cErr) throw new Error("Menu Submission Failed: " + cErr.message);
       }
 
@@ -441,6 +452,21 @@ export default function ConsumptionLog() {
                   const isLow = balanceAfter < 5 && balanceAfter >= 0;
                   const isBorrowed = balanceAfter < 0;
 
+                  const getWidthClass = (ratioVal: number) => {
+                    if (ratioVal <= 0) return 'w-0';
+                    if (ratioVal <= 0.1) return 'w-[10%]';
+                    if (ratioVal <= 0.2) return 'w-[20%]';
+                    if (ratioVal <= 0.3) return 'w-[30%]';
+                    if (ratioVal <= 0.4) return 'w-[40%]';
+                    if (ratioVal <= 0.5) return 'w-1/2';
+                    if (ratioVal <= 0.6) return 'w-[60%]';
+                    if (ratioVal <= 0.7) return 'w-[70%]';
+                    if (ratioVal <= 0.8) return 'w-[80%]';
+                    if (ratioVal <= 0.9) return 'w-[90%]';
+                    return 'w-full';
+                  };
+                  const ratio = balanceAfter / (stock?.current_balance || 1);
+
                   return (
                     <div key={item} className={`p-4 border group transition-all ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/10 border-white/10'}`}>
                       <div className="flex justify-between items-center mb-2">
@@ -449,10 +475,8 @@ export default function ConsumptionLog() {
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-1.5 bg-white/10 overflow-hidden">
-                          {/* eslint-disable-next-line */}
                           <div
-                            className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : (isLow ? 'bg-amber-400' : 'bg-green-400')}`}
-                            style={{ width: `${Math.max(0, Math.min(100, (balanceAfter / (stock?.current_balance || 1)) * 100))}%` }}
+                            className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : (isLow ? 'bg-amber-400' : 'bg-green-400')} ${getWidthClass(ratio)}`}
                           ></div>
                         </div>
                         <span className={`text-[10px] font-black ${isBorrowed ? 'text-red-400' : (isLow ? 'text-amber-300' : 'text-white/80')}`}>

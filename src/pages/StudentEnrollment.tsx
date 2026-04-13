@@ -2,6 +2,10 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout';
 import { Save, CheckCircle2, Loader2, Info } from 'lucide-react';
+import type { Database } from '../types/database.types';
+
+type Enrollment = Database['public']['Tables']['student_enrollment']['Row'];
+type Profile = Database['public']['Tables']['profiles']['Row'];
 
 export default function StudentEnrollment() {
   const [userId, setUserId] = useState<string | null>(null);
@@ -26,7 +30,7 @@ export default function StudentEnrollment() {
   // Calculations
   const totalPrimary = std1 + std2 + std3 + std4 + std5;
   const totalUpperPrimary = std6 + std7 + std8;
-  const grandTotal = totalPrimary + totalUpperPrimary;
+  const grandTotal = (hasPrimary ? totalPrimary : 0) + (hasUpperPrimary ? totalUpperPrimary : 0);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -48,10 +52,11 @@ export default function StudentEnrollment() {
     if (!userId) return;
     setFetchLoading(true);
     try {
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from('student_enrollment')
         .select('*')
         .eq('teacher_id', userId)
+        .returns<Enrollment[]>()
         .maybeSingle();
 
       if (error) throw error;
@@ -67,10 +72,11 @@ export default function StudentEnrollment() {
       }
 
       // Also fetch configuration flags from profiles
-      const { data: profileData } = await (supabase as any)
+      const { data: profileData } = await supabase
         .from('profiles')
         .select('has_primary, has_upper_primary')
         .eq('id', userId)
+        .returns<Profile[]>()
         .single();
       
       if (profileData) {
@@ -90,32 +96,33 @@ export default function StudentEnrollment() {
     setMessage({ type: '', text: '' });
 
     try {
-      const { error } = await (supabase as any)
-        .from('student_enrollment')
-        .upsert(
-          {
-            teacher_id: userId,
-            std_1: std1,
-            std_2: std2,
-            std_3: std3,
-            std_4: std4,
-            std_5: std5,
-            std_6: std6,
-            std_7: std7,
-            std_8: std8
-          },
-          { onConflict: 'teacher_id' }
-        );
+      const enrollmentPayload: Database['public']['Tables']['student_enrollment']['Insert'] = {
+        teacher_id: userId,
+        std_1: std1,
+        std_2: std2,
+        std_3: std3,
+        std_4: std4,
+        std_5: std5,
+        std_6: std6,
+        std_7: std7,
+        std_8: std8
+      };
+
+      const { error } = await (supabase
+        .from('student_enrollment') as any)
+        .upsert(enrollmentPayload, { onConflict: 'teacher_id' });
 
       if (error) throw error;
 
       // Also save configuration flags to profiles table
-      const { error: profileError } = await (supabase as any)
-        .from('profiles')
-        .update({
-          has_primary: hasPrimary,
-          has_upper_primary: hasUpperPrimary
-        })
+      const profilePayload: Database['public']['Tables']['profiles']['Update'] = {
+        has_primary: hasPrimary,
+        has_upper_primary: hasUpperPrimary
+      };
+
+      const { error: profileError } = await (supabase
+        .from('profiles') as any)
+        .update(profilePayload)
         .eq('id', userId);
 
       if (profileError) throw profileError;

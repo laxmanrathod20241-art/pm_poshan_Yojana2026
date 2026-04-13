@@ -1,17 +1,46 @@
-// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout';
 import { FileStack, Loader2, Save, Printer, RefreshCw } from 'lucide-react';
+import type { Database } from '../types/database.types';
+
+type Profile = Database['public']['Tables']['profiles']['Row'];
+type ItemLedgerSnapshot = Database['public']['Tables']['item_ledger_reports']['Row'];
 
 interface MenuItem {
   item_code: string;
   item_name: string;
 }
 
+interface MatrixRow {
+  monthId: string;
+  opening: string;
+  received: string;
+  borrowed: string;
+  total: string;
+  consumed: string;
+  returned: string;
+  totalExpense: string;
+  closing: string;
+  [key: string]: string;
+}
+
+interface ItemLedgerTotals {
+  opening: string;
+  received: string;
+  borrowed: string;
+  total: string;
+  consumed: string;
+  returned: string;
+  totalExpense: string;
+  closing: string;
+  [key: string]: string;
+}
+
 export default function ItemLedgerReport() {
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isGenerated, setIsGenerated] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
 
   const marathiMonths = ['जानेवारी', 'फेब्रुवारी', 'मार्च', 'एप्रिल', 'मे', 'जून', 'जुलै', 'ऑगस्ट', 'सप्टेंबर', 'ऑक्टोबर', 'नोव्हेंबर', 'डिसेंबर'];
@@ -28,15 +57,16 @@ export default function ItemLedgerReport() {
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [selectedItemName, setSelectedItemName] = useState<string>('');
+  const [selectedScope, setSelectedScope] = useState<'primary' | 'upper_primary'>('primary');
 
   const [schoolName, setSchoolName] = useState('');
   const [centerName, setCenterName] = useState('');
   const [hasPrimary, setHasPrimary] = useState(true);
   const [hasUpperPrimary, setHasUpperPrimary] = useState(true);
 
-  const [reportMatrix, setReportMatrix] = useState<any[]>([]);
+  const [reportMatrix, setReportMatrix] = useState<MatrixRow[]>([]);
   const [reportMonths, setReportMonths] = useState<{ month: number, year: number, label: string }[]>([]);
-  const [totals, setTotals] = useState<any>(null);
+  const [totals, setTotals] = useState<ItemLedgerTotals | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -48,40 +78,61 @@ export default function ItemLedgerReport() {
   }, []);
 
   const fetchBaseData = async (id: string) => {
-    const { data: profile } = await (supabase as any).from('profiles').select('school_name_mr, center_name_mr, has_primary, has_upper_primary').eq('id', id).maybeSingle();
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('school_name_mr, center_name_mr, has_primary, has_upper_primary')
+      .eq('id', id)
+      .returns<Profile[]>()
+      .maybeSingle();
+
     if (profile) {
       setSchoolName(profile.school_name_mr || '');
       setCenterName(profile.center_name_mr || '');
       setHasPrimary(profile.has_primary ?? true);
       setHasUpperPrimary(profile.has_upper_primary ?? true);
+
+      // Auto-snap selectedScope based on section availability
+      if (profile.has_primary === false && profile.has_upper_primary === true) {
+        setSelectedScope('upper_primary');
+      } else {
+        setSelectedScope('primary');
+      }
     }
 
-    const { data: menuMaster } = await (supabase as any).from('menu_master').select('item_code, item_name').eq('teacher_id', id).order('created_at');
+    const { data: menuMaster } = await supabase.from('menu_master').select('item_code, item_name').eq('teacher_id', id).order('created_at').returns<MenuItem[]>();
     if (menuMaster) {
       setMenuItems(menuMaster as MenuItem[]);
-      if (menuMaster.length > 0) setSelectedItemName(menuMaster[0].item_name);
+      if (menuMaster.length > 0 && !selectedItemName) setSelectedItemName(menuMaster[0].item_name);
     }
   };
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (force = false) => {
     if (!userId || !selectedItemName) return;
     setLoading(true);
+    
+    // Immediate state sanitation to prevent ghost data flicker
+    setReportMatrix([]);
+    setTotals(null);
+    setIsGenerated(false);
     setIsSaved(false);
 
     try {
-      // 1. Check if snapshot exists for this item and range
       // Range signature: YYYY-MM_to_YYYY-MM
       const dateRangeId = `${startYear}-${String(startMonth).padStart(2, '0')}_to_${endYear}-${String(endMonth).padStart(2, '0')}`;
 
-      const { data: snapshot } = await (supabase as any)
+      const { data: snapshot } = await supabase
         .from('item_ledger_reports')
         .select('*')
         .eq('teacher_id', userId)
         .eq('item_name', selectedItemName)
         .eq('date_range', dateRangeId)
+        .eq('date_range', dateRangeId)
+        .eq('standard_group', selectedScope)
+        .returns<ItemLedgerSnapshot[]>()
         .maybeSingle();
 
-      if (snapshot && snapshot.report_data) {
+      if (snapshot && snapshot.report_data && !force) {
+        setIsGenerated(true);
         setIsSaved(true);
         const parsed = typeof snapshot.report_data === 'string' ? JSON.parse(snapshot.report_data) : snapshot.report_data;
         setReportMatrix(parsed.matrix || []);
@@ -111,21 +162,51 @@ export default function ItemLedgerReport() {
       setReportMonths(generatedMonths);
 
       // 3. Fetch monthly_reports in one go
-      const { data: reports } = await (supabase as any)
+      const { data: reports } = await supabase
         .from('monthly_reports')
         .select('report_month, report_year, report_data')
-        .eq('teacher_id', userId);
+        .eq('teacher_id', userId)
+        .eq('standard_group', selectedScope);
 
       const reportsMap = new Map();
       (reports || []).forEach((r: any) => {
         reportsMap.set(`${r.report_year}-${r.report_month}`, r);
       });
 
+      // 4. Fetch Raw Receipts for the entire range (to ensure live deletion sync)
+      const { data: rawReceipts } = await supabase
+        .from('stock_receipts')
+        .select('receipt_date, quantity')
+        .eq('teacher_id', userId)
+        .eq('item_name', selectedItemName)
+        .eq('standard_group', selectedScope)
+        .gte('receipt_date', `${startYear}-${String(startMonth).padStart(2, '0')}-01`)
+        .lt('receipt_date', `${endYear}-${String(endMonth === 12 ? 1 : endMonth + 1).padStart(2, '0')}-01`);
+
+      const receiptsByMonth = new Map();
+      (rawReceipts || []).forEach((r: any) => {
+          const d = new Date(r.receipt_date);
+          const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+          receiptsByMonth.set(key, (receiptsByMonth.get(key) || 0) + Number(r.quantity));
+      });
+
       // Determine initial opening balance mathematically
-      // Calculate Chained Matrix
-      const matrix: any[] = [];
       let currentOpening = 0;
 
+      // FALLBACK: Fetch from inventory_stock as a starting baseline if no reports exist
+      const { data: stockEntry } = await supabase
+        .from('inventory_stock')
+        .select('*')
+        .eq('teacher_id', userId)
+        .eq('item_name', selectedItemName)
+        .eq('standard_group', selectedScope)
+        .returns<Database['public']['Tables']['inventory_stock']['Row'][]>()
+        .maybeSingle();
+      
+      const baselineBalance = stockEntry ? Number(stockEntry.current_balance) : 0;
+
+      // Calculate Chained Matrix
+      const matrix: any[] = [];
       let grandReceived = 0;
       let grandBorrowed = 0;
       let grandConsumed = 0;
@@ -134,7 +215,6 @@ export default function ItemLedgerReport() {
         const dm = generatedMonths[i];
         const key = `${dm.year}-${dm.month}`;
         let mFoundOpening = 0;
-        let mReceived = 0;
         let mConsumed = 0;
         let mBorrowed = 0;
 
@@ -145,17 +225,18 @@ export default function ItemLedgerReport() {
           const itemMatch = repData?.find((x: any) => x.item === selectedItemName);
           if (itemMatch) {
             mFoundOpening = Number(itemMatch.openingBalance) || 0;
-            mReceived = Number(itemMatch.received) || 0;
             mConsumed = Number(itemMatch.consumed) || 0;
             mBorrowed = Number(itemMatch.borrowed) || 0;
           }
         }
 
         if (i === 0) {
-          currentOpening = mFoundOpening;
+          // Priority: 1. Official Report Opening Balance, 2. Current Inventory Baseline
+          currentOpening = mFoundOpening || baselineBalance;
         }
 
-        const received = mReceived;
+        const liveReceived = receiptsByMonth.get(key) || 0;
+        const received = liveReceived;
         const borrowed = mBorrowed;
         const total = currentOpening + received + borrowed;
 
@@ -175,7 +256,7 @@ export default function ItemLedgerReport() {
           returned: returned.toFixed(2),
           totalExpense: totalExpense.toFixed(2),
           closing: closing.toFixed(2)
-        });
+        } as MatrixRow);
 
         grandReceived += received;
         grandBorrowed += borrowed;
@@ -202,6 +283,7 @@ export default function ItemLedgerReport() {
 
       setReportMatrix(matrix);
       setTotals(finalTotals);
+      setIsGenerated(true);
 
     } catch (err: any) {
       console.error("Generator Error", err);
@@ -218,31 +300,38 @@ export default function ItemLedgerReport() {
     try {
       const dateRangeId = `${startYear}-${String(startMonth).padStart(2, '0')}_to_${endYear}-${String(endMonth).padStart(2, '0')}`;
 
-      const payload = {
+      const payload: Database['public']['Tables']['item_ledger_reports']['Insert'] = {
         teacher_id: userId,
         item_name: selectedItemName,
         date_range: dateRangeId,
-        report_data: JSON.stringify({
+        standard_group: selectedScope,
+        report_data: {
           months: reportMonths,
           matrix: reportMatrix,
           totals: totals
-        })
+        }
       };
 
-      const { data: existing } = await (supabase as any)
+      const { data: existing } = await supabase
         .from('item_ledger_reports')
         .select('id')
         .eq('teacher_id', userId)
         .eq('item_name', selectedItemName)
         .eq('date_range', dateRangeId)
+        .eq('standard_group', selectedScope)
+        .returns<ItemLedgerSnapshot[]>()
         .maybeSingle();
 
       let err;
       if (existing) {
-        const res = await (supabase as any).from('item_ledger_reports').update(payload).eq('id', existing.id);
+        const res = await (supabase
+          .from('item_ledger_reports') as any)
+          .update(payload)
+          .eq('id', existing.id)
+          .eq('teacher_id', userId);
         err = res.error;
       } else {
-        const res = await (supabase as any).from('item_ledger_reports').insert([payload]);
+        const res = await (supabase.from('item_ledger_reports') as any).insert([payload]);
         err = res.error;
       }
 
@@ -257,7 +346,7 @@ export default function ItemLedgerReport() {
     }
   };
 
-  const renderMetricRow = (label: string, rowKey: string, highlight?: boolean) => {
+  const renderMetricRow = (label: string, rowKey: keyof MatrixRow, highlight?: boolean) => {
     return (
       <tr className={`border-b border-black print:border-[1px] hover:bg-slate-50 print:hover:bg-transparent ${highlight ? 'font-black bg-gray-100/50 print:bg-transparent' : 'font-bold'}`}>
         <td className="border-r border-black print:border-[1px] px-2 py-2.5 text-left w-48 sticky left-0 bg-white print:static uppercase tracking-tighter shadow-[1px_0_0_black] print:shadow-none whitespace-nowrap">{label}</td>
@@ -267,89 +356,139 @@ export default function ItemLedgerReport() {
           </td>
         ))}
         <td className="px-1.5 py-2.5 text-center w-px whitespace-nowrap font-black bg-gray-50/50 print:bg-transparent text-[#474379] print:text-black shadow-inner border-l-2 border-black">
-          {totals && totals[rowKey] === '0.00' ? '-' : totals?.[rowKey]}
+          {totals && totals[rowKey as keyof ItemLedgerTotals] === '0.00' ? '-' : totals ? totals[rowKey as keyof ItemLedgerTotals] : '-'}
         </td>
       </tr>
     )
+  };
+
+  const resetFlow = () => {
+    setIsGenerated(false);
+    setIsSaved(false);
+    setReportMatrix([]);
+    setTotals(null);
   };
 
   return (
     <Layout>
       <div className="mx-auto mt-4 pb-20 print:p-0 print:m-0 print:max-w-full print:bg-white w-full lg:max-w-[95vw]">
 
-        {/* High-Tech Mobile Filter Bar */}
-        <div className="mb-6 mx-auto w-full lg:max-w-5xl print:hidden">
-          <div className="bg-white/80 backdrop-blur-xl p-5 md:p-8 rounded-3xl md:rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.05)] border border-white flex flex-col items-center">
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full mb-6">
-              {/* Item Selection */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Select Inventory Item</label>
-                <div className="bg-slate-100/50 p-1.5 rounded-2xl border border-slate-100 flex items-center gap-3">
-                  <div className="p-2 bg-white rounded-xl shadow-sm text-blue-600"><FileStack size={18} /></div>
-                  <select
-                    value={selectedItemName}
-                    onChange={e => setSelectedItemName(e.target.value)}
-                    className="bg-transparent flex-1 py-1.5 font-bold text-sm text-slate-700 outline-none"
-                    title="साहित्य निवडा (Select Inventory Item)"
-                  >
-                    {menuItems.map((m, i) => <option key={i} value={m.item_name}>{m.item_name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Start Date */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">From Period</label>
-                <div className="bg-slate-100/50 p-1.5 rounded-2xl border border-slate-100 flex items-center gap-2">
-                  <select value={startMonth} onChange={e => setStartMonth(Number(e.target.value))} className="bg-transparent flex-1 py-1.5 font-bold text-xs text-slate-700 outline-none" title="आरंभ महिना निवडा (Select Start Month)">
-                    {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-                  </select>
-                  <div className="w-px h-6 bg-slate-200" />
-                  <select value={startYear} onChange={e => setStartYear(Number(e.target.value))} className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none" title="आरंभ वर्ष निवडा (Select Start Year)">
-                    {years.map(y => <option key={y} value={y}>{y}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* End Date */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">To Period</label>
-                <div className="bg-slate-100/50 p-1.5 rounded-2xl border border-slate-100 flex items-center gap-2">
-                  <select value={endMonth} onChange={e => setEndMonth(Number(e.target.value))} className="bg-transparent flex-1 py-1.5 font-bold text-xs text-slate-700 outline-none" title="अखेर महिना निवडा (Select End Month)">
-                    {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-                  </select>
-                  <div className="w-px h-6 bg-slate-200" />
-                  <select value={endYear} onChange={e => setEndYear(Number(e.target.value))} className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none" title="अखेर वर्ष निवडा (Select End Year)">
-                    {years.map(y => <option key={y} value={y}>{y}</option>)}
-                  </select>
-                </div>
+        {/* Optimized Inline Control Bar */}
+        <div className="mb-6 mx-auto w-full lg:max-w-[1400px] print:hidden">
+          <div className="bg-white/90 backdrop-blur-md p-4 rounded-[2rem] shadow-sm border border-slate-100 flex flex-wrap items-end gap-4">
+            
+            {/* Item Selection */}
+            <div className="flex-1 min-w-[200px] space-y-1.5">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Inventory Item</label>
+              <div className="bg-slate-50 p-1 rounded-xl border border-slate-100 flex items-center gap-2">
+                <FileStack size={14} className="ml-2 text-blue-500" />
+                <select 
+                  value={selectedItemName} 
+                  onChange={e => { setSelectedItemName(e.target.value); resetFlow(); }}
+                  className="bg-transparent flex-1 py-1.5 font-bold text-xs text-slate-700 outline-none"
+                  title="वस्तू निवडा (Select inventory item)"
+                >
+                  {menuItems.map(item => <option key={item.item_code} value={item.item_name}>{item.item_name}</option>)}
+                </select>
               </div>
             </div>
 
-            <div className="flex gap-3 w-full border-t border-slate-100 pt-6">
+            {/* Standard Toggle */}
+            {hasPrimary && hasUpperPrimary && (
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Standard</label>
+                <div className="bg-slate-50 p-1 rounded-xl border border-slate-200 flex items-center h-10 shadow-inner w-44">
+                  <button 
+                    onClick={() => { setSelectedScope('primary'); resetFlow(); }}
+                    className={`flex-1 h-full text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${selectedScope === 'primary' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    I-V
+                  </button>
+                  <button 
+                    onClick={() => { setSelectedScope('upper_primary'); resetFlow(); }}
+                    className={`flex-1 h-full text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${selectedScope === 'upper_primary' ? 'bg-white text-purple-600 shadow-sm border border-purple-100' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    VI-VIII
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* From Period */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">From Period</label>
+              <div className="bg-slate-50 p-1 rounded-xl border border-slate-100 flex items-center gap-1">
+                <select 
+                  value={startMonth} 
+                  onChange={e => { setStartMonth(Number(e.target.value)); resetFlow(); }} 
+                  className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
+                  title="सुरूवातीचा महिना (Start month)"
+                >
+                  {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                </select>
+                <div className="w-px h-4 bg-slate-200" />
+                <select 
+                  value={startYear} 
+                  onChange={e => { setStartYear(Number(e.target.value)); resetFlow(); }} 
+                  className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
+                  title="सुरूवातीचे वर्ष (Start year)"
+                >
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* To Period */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">To Period</label>
+              <div className="bg-slate-50 p-1 rounded-xl border border-slate-100 flex items-center gap-1">
+                <select 
+                  value={endMonth} 
+                  onChange={e => { setEndMonth(Number(e.target.value)); resetFlow(); }} 
+                  className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
+                  title="अखेरचा महिना (End month)"
+                >
+                  {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                </select>
+                <div className="w-px h-4 bg-slate-200" />
+                <select 
+                  value={endYear} 
+                  onChange={e => { setEndYear(Number(e.target.value)); resetFlow(); }} 
+                  className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
+                  title="अखेरचे वर्ष (End year)"
+                >
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2 ml-auto lg:ml-0">
               <button
-                onClick={handleGenerate}
+                onClick={() => handleGenerate(isGenerated)}
                 disabled={loading}
-                className="flex-1 bg-white border border-slate-200 text-slate-600 font-black py-4 rounded-2xl text-[10px] uppercase tracking-[0.2em] shadow-sm hover:bg-slate-50 transition-all flex justify-center items-center gap-2 active:scale-95"
+                className={`h-10 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 active:scale-95 shadow-sm border ${isGenerated ? 'bg-white border-slate-200 text-slate-600' : 'bg-slate-900 border-slate-900 text-white'}`}
               >
-                {loading ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />} Generate Data
+                {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />} 
+                {isGenerated ? 'RE-GENERATE (RE-SYNC LIVE)' : 'GENERATE DATA'}
               </button>
 
-              {!isSaved ? (
+              {isGenerated && !isSaved && (
                 <button
                   onClick={handleSave}
                   disabled={loading || reportMatrix.length === 0}
-                  className="flex-[2] bg-blue-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50"
+                  className="h-10 px-6 bg-blue-600 text-white font-black rounded-xl text-[10px] uppercase tracking-widest shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all flex items-center gap-2 active:scale-95"
                 >
-                  <Save size={18} /> Save Record
+                  <Save size={14} /> SAVE RECORD
                 </button>
-              ) : (
+              )}
+
+              {isSaved && (
                 <button
                   onClick={() => window.print()}
-                  className="flex-[2] bg-slate-900 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-[0.2em] shadow-xl hover:bg-slate-800 transition-all flex justify-center items-center gap-2 active:scale-95"
+                  className="h-10 px-6 bg-emerald-600 text-white font-black rounded-xl text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center gap-2 active:scale-95"
                 >
-                  <Printer size={18} /> Print Register
+                  <Printer size={14} /> PRINT REGISTER
                 </button>
               )}
             </div>
@@ -379,7 +518,7 @@ export default function ItemLedgerReport() {
                   {/* Top Titles - Centered */}
                   <div className="text-center">
                     <h1 className="text-lg md:text-xl font-bold">
-                      प्रधान मंत्री पोषण शक्ती निर्माण योजना {hasPrimary && !hasUpperPrimary ? '(इ.१ ते ५ वी)' : !hasPrimary && hasUpperPrimary ? '(इ.६ ते ८ वी)' : '(इ.१ ते ८ वी)'}
+                      प्रधान मंत्री पोषण शक्ती निर्माण योजना {selectedScope === 'primary' ? '(इ.१ ते ५ वी)' : '(इ.६ ते ८ वी)'}
                     </h1>
                     <h2 className="text-md md:text-lg font-bold mt-1">धान्यादी मालाचा साठा रजिस्टर</h2>
                   </div>

@@ -1,7 +1,7 @@
-// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { calculateConsumedKg } from '../utils/inventoryUtils';
 import { supabase } from '../lib/supabaseClient';
+import type { Database } from '../types/database.types';
 import { 
   Calculator, 
   CheckCircle2, 
@@ -14,6 +14,18 @@ import {
   RefreshCcw 
 } from 'lucide-react';
 
+type InventoryStock = Database['public']['Tables']['inventory_stock']['Row'];
+type MenuItemMaster = Database['public']['Tables']['menu_master']['Row'];
+type DailyLog = Database['public']['Tables']['daily_logs']['Row'];
+type ConsumptionLogEntry = Database['public']['Tables']['consumption_logs']['Row'];
+type MenuSchedule = Database['public']['Tables']['menu_weekly_schedule']['Row'];
+type EnrollmentEntity = Database['public']['Tables']['student_enrollment']['Row'];
+
+interface MenuTemplate {
+  mainFoods: string[];
+  ingredients: string[];
+}
+
 interface DailyLogFormProps {
   targetDate: string; // YYYY-MM-DD
   onClose: () => void;
@@ -25,11 +37,10 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   const [loading, setLoading] = useState(false);
   const [primaryCount, setPrimaryCount] = useState<string>('');
   const [upperCount, setUpperCount] = useState<string>('');
-  const [inventory, setInventory] = useState<any[]>([]);
+  const [inventory, setInventory] = useState<InventoryStock[]>([]);
   const [isHoliday, setIsHoliday] = useState(false);
   const [holidayRemarks, setHolidayRemarks] = useState('');
   const [foodNameMap, setFoodNameMap] = useState<Record<string, string>>({});
-  const [liveStockMap, setLiveStockMap] = useState<Record<string, number>>({});
   const [foodGramsMap, setFoodGramsMap] = useState<Record<string, {primary: number, upper: number}>>({});
   const [enrollment, setEnrollment] = useState({ primary: 0, upper: 0 });
   const [isEditing, setIsEditing] = useState(false);
@@ -41,9 +52,9 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
   
   // Master Data & Template Logic
-  const [masterMainFoods, setMasterMainFoods] = useState<any[]>([]);
-  const [masterIngredients, setMasterIngredients] = useState<any[]>([]);
-  const [scheduledMenu, setScheduledMenu] = useState<{ mainFoods: string[], ingredients: string[] } | null>(null);
+  const [masterMainFoods, setMasterMainFoods] = useState<MenuItemMaster[]>([]);
+  const [masterIngredients, setMasterIngredients] = useState<MenuItemMaster[]>([]);
+  const [scheduledMenu, setScheduledMenu] = useState<MenuTemplate | null>(null);
   
   // Form State (The Override Layer)
   const [localMainFoods, setLocalMainFoods] = useState<string[]>([]);
@@ -76,11 +87,11 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     try 
     {
       const [masterRes, enrollmentRes, existingLogRes, consumptionLogRes, profileRes] = await Promise.all([
-        (supabase as any).from('menu_master').select('*').eq('teacher_id', userId),
-        (supabase as any).from('student_enrollment').select('*').eq('teacher_id', userId).maybeSingle(),
-        (supabase as any).from('daily_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle(),
-        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle(),
-        (supabase as any).from('profiles').select('has_primary, has_upper_primary').eq('id', userId).single()
+        supabase.from('menu_master').select('*').eq('teacher_id', userId).returns<MenuItemMaster[]>(),
+        supabase.from('student_enrollment').select('*').eq('teacher_id', userId).returns<EnrollmentEntity[]>().maybeSingle(),
+        supabase.from('daily_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<DailyLog[]>().maybeSingle(),
+        supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<ConsumptionLogEntry[]>().maybeSingle(),
+        supabase.from('profiles').select('has_primary, has_upper_primary').eq('id', userId).returns<any[]>().maybeSingle()
       ]);
 
       console.log("DailyLogForm Init Trace:", {
@@ -135,13 +146,14 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
       const weekNum = Math.ceil(dateOfMonth / 7);
       const scheduleType = weekNum % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
       
-      const { data: menu } = await (supabase as any)
+      const { data: menu } = await supabase
         .from('menu_weekly_schedule')
         .select('*')
         .eq('teacher_id', userId)
         .eq('week_pattern', scheduleType)
         .eq('day_name', stringDay)
         .eq('is_active', true)
+        .returns<MenuSchedule[]>()
         .maybeSingle();
       
       let templateMF: string[] = [];
@@ -173,14 +185,8 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         setLocalIngredients(templateIng);
       }
 
-      const { data: stock } = await (supabase as any).from('inventory_stock').select('*').eq('teacher_id', userId);
+      const { data: stock } = await supabase.from('inventory_stock').select('*').eq('teacher_id', userId).returns<InventoryStock[]>();
       setInventory(stock || []);
-      const lMap: Record<string, number> = {};
-      (stock || []).forEach((s: any) => {
-        lMap[s.item_name] = Number(s.current_balance);
-        if (s.item_code) lMap[s.item_code] = Number(s.current_balance);
-      });
-      setLiveStockMap(lMap);
     } catch (err: any) {
       console.error(err);
     } finally {
@@ -188,14 +194,23 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     }
   };
 
-  const calculateRequirement = (itemIdentifier?: string) => {
+  const calculateRequirement = (itemIdentifier?: string, scope?: 'primary' | 'upper_primary') => {
     if (!primaryCount && !upperCount) return 0;
     const grams = (itemIdentifier && foodGramsMap[itemIdentifier]) || { primary: GRAMS_PRIMARY, upper: GRAMS_UPPER };
+    
+    if (scope === 'primary') {
+      return (Number(primaryCount || 0) * grams.primary) / 1000;
+    }
+    if (scope === 'upper_primary') {
+      return (Number(upperCount || 0) * (grams.upper || 0)) / 1000;
+    }
+
+    // Fallback/Legacy: combined calculation
     return calculateConsumedKg(
       Number(primaryCount || 0),
       Number(upperCount || 0),
       grams.primary,
-      grams.upper
+      grams.upper || 0
     );
   };
 
@@ -241,12 +256,21 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
       const foundDeficits: {name: string, deficit: number}[] = [];
       
       newItems.forEach(item => {
-        const deductKg = calculateRequirement(item);
-        const currentStock = inventory.find(i => i.item_name === item || i.item_code === item || (foodNameMap[item] && i.item_name === foodNameMap[item]));
-        if (currentStock) {
-          const balance = Number(currentStock.current_balance);
-          if (balance < deductKg) {
-            foundDeficits.push({ name: item, deficit: Number((deductKg - balance).toFixed(3)) });
+        // Check Primary Deficit
+        if (Number(primaryCount) > 0) {
+          const reqP = calculateRequirement(item, 'primary');
+          const stockP = inventory.find(i => (i.item_name === item || i.item_code === item) && i.standard_group === 'primary');
+          if (stockP && Number(stockP.current_balance) < reqP) {
+            foundDeficits.push({ name: `${item} (Primary)`, deficit: Number((reqP - Number(stockP.current_balance)).toFixed(3)) });
+          }
+        }
+
+        // Check Upper Primary Deficit
+        if (Number(upperCount) > 0) {
+          const reqU = calculateRequirement(item, 'upper_primary');
+          const stockU = inventory.find(i => (i.item_name === item || i.item_code === item) && i.standard_group === 'upper_primary');
+          if (stockU && Number(stockU.current_balance) < reqU) {
+            foundDeficits.push({ name: `${item} (Upper Primary)`, deficit: Number((reqU - Number(stockU.current_balance)).toFixed(3)) });
           }
         }
       });
@@ -266,77 +290,36 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     setShowBorrowedModal(false);
 
     try {
-      const [oldConsumptionRes, existingDailyRes] = await Promise.all([
-        (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle(),
-        (supabase as any).from('daily_logs').select('id').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle()
-      ]);
+      // Transform grams map for RPC
+      const gramsPrimaryMap: Record<string, number> = {};
+      const gramsUpperMap: Record<string, number> = {};
+      Object.entries(foodGramsMap).forEach(([name, g]) => {
+        gramsPrimaryMap[name] = g.primary;
+        gramsUpperMap[name] = g.upper || 0;
+      });
 
-      const oldConsumption = oldConsumptionRes.data;
-      const verifiedDailyId = existingDailyRes.data?.id;
+      const { error } = await (supabase.rpc as any)('process_daily_consumption', {
+        p_teacher_id: userId,
+        p_log_date: targetDate,
+        p_is_holiday: isHoliday,
+        p_holiday_remarks: holidayRemarks,
+        p_meals_primary: Number(primaryCount || 0),
+        p_meals_upper: Number(upperCount || 0),
+        p_main_foods: localMainFoods,
+        p_ingredients: localIngredients,
+        p_is_overridden: isOverridden,
+        p_original_template: scheduledMenu,
+        p_grams_primary: gramsPrimaryMap,
+        p_grams_upper: gramsUpperMap
+      });
 
-
-      if (oldConsumption) {
-        const oldItems = Array.from(new Set([...(oldConsumption.main_foods_all || [oldConsumption.main_food]), ...(oldConsumption.ingredients_used || [])])).filter(Boolean);
-        for (const item of oldItems as string[]) {
-          const grams = foodGramsMap[item] || { primary: GRAMS_PRIMARY, upper: GRAMS_UPPER };
-          const restoreKg = ((Number(oldConsumption.meals_served_primary || 0) * grams.primary) + (Number(oldConsumption.meals_served_upper_primary || 0) * grams.upper)) / 1000;
-          if (restoreKg > 0) {
-            const currentStock = inventory.find(i => i.item_name === item || i.item_code === item || (foodNameMap[item] && i.item_name === foodNameMap[item]));
-            if (currentStock) {
-              const restoredBalance = Number(currentStock.current_balance) + restoreKg;
-              await (supabase as any).from('inventory_stock').update({ current_balance: restoredBalance }).eq('id', currentStock.id);
-              currentStock.current_balance = restoredBalance;
-            }
-          }
-        }
-      }
-
-
-      if (!isHoliday) {
-        const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
-        for (const item of newItems) {
-          const deductKg = calculateRequirement(item);
-          if (deductKg > 0) {
-            const currentStock = inventory.find(i => i.item_name === item || i.item_code === item || (foodNameMap[item] && i.item_name === foodNameMap[item]));
-            if (currentStock) {
-              const newBalance = Number(currentStock.current_balance) - deductKg;
-              await (supabase as any).from('inventory_stock').update({ current_balance: newBalance }).eq('id', currentStock.id);
-              currentStock.current_balance = newBalance;
-            }
-          }
-        }
-      }
-
-      const dailyPayload = {
-        teacher_id: userId, log_date: targetDate, is_holiday: isHoliday, holiday_remarks: holidayRemarks,
-        meals_served_primary: Number(primaryCount || 0), meals_served_upper_primary: Number(upperCount || 0)
-      };
-
-      if (verifiedDailyId) {
-        await (supabase as any).from('daily_logs').update(dailyPayload).eq('id', verifiedDailyId);
-      } else {
-        await (supabase as any).from('daily_logs').insert([dailyPayload]);
-      }
-
-      // Safe Audit Payload without holiday flags to avoid Postgres schema mismatch errors
-      const auditPayload = {
-        teacher_id: userId, log_date: targetDate,
-        meals_served_primary: Number(primaryCount || 0), meals_served_upper_primary: Number(upperCount || 0),
-        main_food: localMainFoods[0] || '', main_foods_all: localMainFoods, ingredients_used: localIngredients,
-        is_overridden: isOverridden, original_template: scheduledMenu ? JSON.stringify(scheduledMenu) : null
-      };
-
-      const supabaseAny: any = supabase;
-      if (oldConsumption) {
-        await supabaseAny.from('consumption_logs').update(auditPayload).eq('id', (oldConsumption as any).id);
-      } else {
-        await supabaseAny.from('consumption_logs').insert([auditPayload]);
-      }
+      if (error) throw error;
 
       setStatus({ type: 'success', text: isEditing ? 'नोंद अपडेट केली (Log updated)!' : 'नोंद यशस्वीरित्या जतन केली (Log submitted)!' });
       setTimeout(() => { onSuccess(); onClose(); }, 1200);
     } catch (err: any) {
-      setStatus({ type: 'error', text: "⚠️ जतन करण्यात त्रुटी (Save Error): " + err.message });
+      console.error("Save Error:", err);
+      setStatus({ type: 'error', text: "⚠️ जतन करण्यात त्रुटी (Save Error): " + (err.message || "Unknown error") });
     } finally {
       setLoading(false);
     }
@@ -346,7 +329,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     if (!existingLogId || !window.confirm("Are you sure? Stock will be restored.")) return;
     setLoading(true);
     try {
-      const { data: oldConsumption } = await (supabase as any).from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).maybeSingle();
+      const { data: oldConsumption } = await supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<ConsumptionLogEntry[]>().maybeSingle();
       if (oldConsumption) {
         const itemsToRestore = Array.from(new Set([...(oldConsumption.main_foods_all || [oldConsumption.main_food]), ...(oldConsumption.ingredients_used || [])])).filter(Boolean);
         for (const item of itemsToRestore as string[]) {
@@ -356,13 +339,14 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
             const currentStock = inventory.find(i => i.item_name === item || i.item_code === item || (foodNameMap[item] && i.item_name === foodNameMap[item]));
             if (currentStock) {
               const newBalance = Number(currentStock.current_balance) + kgToRestore;
-              await (supabase as any).from('inventory_stock').update({ current_balance: newBalance }).eq('id', currentStock.id);
+              const { error: updErr } = await (supabase.from('inventory_stock') as any).update({ current_balance: newBalance }).eq('id', currentStock.id);
+              if (updErr) throw updErr;
             }
           }
         }
-        await (supabase as any).from('consumption_logs').delete().eq('id', oldConsumption.id);
+        await (supabase.from('consumption_logs') as any).delete().eq('id', oldConsumption.id);
       }
-      await (supabase as any).from('daily_logs').delete().eq('id', existingLogId);
+      await (supabase.from('daily_logs') as any).delete().eq('id', existingLogId);
       setStatus({ type: 'success', text: "Log deleted & stock restored." });
       setTimeout(() => { onSuccess(); onClose(); }, 1200);
     } catch (err: any) {
@@ -373,13 +357,13 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   };
 
   return (
-    <div className="bg-white max-w-4xl w-full h-[95vh] md:h-auto md:max-h-[90vh] overflow-hidden rounded-t-3xl md:rounded-3xl shadow-2xl border border-slate-200 flex flex-col relative mt-16 md:mt-24 mx-auto">
+    <div className="bg-white max-w-4xl w-full rounded-t-3xl md:rounded-3xl shadow-2xl border border-slate-200 flex flex-col relative mx-auto overflow-hidden">
       {/* High-Tech Header */}
-      <div className="bg-[#474379] py-4 px-6 md:px-10 text-white flex justify-between items-center relative overflow-hidden flex-shrink-0">
+      <div className="bg-[#474379] py-2.5 px-6 md:px-8 text-white flex justify-between items-center relative overflow-hidden flex-shrink-0">
         <ArrowRight className="absolute -right-4 -bottom-4 text-white/10" size={120} />
         <div className="relative z-10">
           <h1 className="text-lg md:text-xl font-black text-white tracking-tighter uppercase italic flex items-center gap-3">
-             <Utensils className="text-blue-400" size={24} /> Daily Log Entry
+             <Utensils className="text-blue-400" size={20} /> Daily Log Entry
           </h1>
           <div className="flex items-center gap-2 mt-1">
             <span className="bg-white/20 px-3 py-0.5 rounded-full text-[10px] md:text-xs font-black uppercase tracking-widest">{targetDate}</span>
@@ -396,9 +380,9 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
             </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto no-scrollbar">
+      <div className="flex-1 no-scrollbar">
         {/* Toggle Section */}
-        <div className="px-5 md:px-10 py-6 bg-indigo-50/50 border-b border-indigo-100 flex flex-col md:flex-row gap-4 items-center">
+         <div className="px-4 sm:px-8 py-3 bg-indigo-50/50 border-b border-indigo-100 flex flex-col md:flex-row gap-3 items-center">
           <div className="flex items-center gap-4 w-full md:w-auto">
              <div className="p-3 bg-indigo-100 text-indigo-700 rounded-2xl">
                 <AlertTriangle size={20} />
@@ -418,28 +402,28 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
 
         <div className="grid grid-cols-1 lg:grid-cols-2">
           {/* Form Side */}
-          <div className="p-5 md:p-10 lg:border-r border-slate-100 space-y-8">
+           <div className="p-4 sm:p-6 lg:border-r border-slate-100 space-y-4 sm:space-y-6">
             {!isHoliday && (
               <>
                 <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
                   <Calculator size={18} className="text-[#3c8dbc]" /> Attendance Input
                 </h3>
                 <div className={`grid ${hasPrimary && hasUpperPrimary ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
-                  {hasPrimary && (
-                    <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
+                   {hasPrimary && (
+                    <div className="bg-white p-3.5 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
                        <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Primary (I-V)</label>
-                      <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${(enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                       <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-xl font-black bg-white border-none outline-none ${(enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
                     </div>
                   )}
-                  {hasUpperPrimary && (
-                    <div className="bg-white p-5 rounded-3xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
+                   {hasUpperPrimary && (
+                    <div className="bg-white p-3.5 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
                        <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Upper (VI-VIII)</label>
-                      <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-2xl font-black bg-white border-none outline-none ${(enrollment.upper > 0 && Number(upperCount) > enrollment.upper) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                       <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-xl font-black bg-white border-none outline-none ${(enrollment.upper > 0 && Number(upperCount) > enrollment.upper) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
                     </div>
                   )}
                 </div>
 
-                <div className="p-6 bg-blue-50/50 border-2 border-blue-200/50 rounded-2xl space-y-6">
+                 <div className="p-4 bg-blue-50/50 border-2 border-blue-200/50 rounded-2xl space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-blue-100 pb-3 gap-2">
                     <h4 className="text-[11px] font-black text-blue-900 uppercase tracking-widest flex items-center gap-2"><Utensils size={14} className="text-blue-600" /> आजचा आहार (Smart Override)</h4>
                     {isOverridden && (
@@ -451,10 +435,10 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                   <div className="space-y-4">
                     <div>
                       <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">मुख्य आहार (Main Dishes)</label>
-                      <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center mb-3">
+                       <div className="flex flex-wrap gap-1.5 p-2 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[40px] items-center mb-2">
                         {localMainFoods.length === 0 && <span className="text-[10px] font-bold text-slate-400 italic px-2">No main dishes selected or available.</span>}
                         {localMainFoods.map(item => (
-                          <span key={item} className="bg-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black text-white uppercase flex items-center gap-2 shadow-md">
+                           <span key={item} className="bg-blue-600 px-2 py-0.5 rounded-lg text-[9px] font-black text-white uppercase flex items-center gap-1.5 shadow-md">
                             {item} <Trash2 size={14} className="cursor-pointer" onClick={() => handleRemoveMainFood(item)} />
                           </span>
                         ))}
@@ -473,10 +457,10 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                     </div>
                     <div>
                       <label className="text-[10px] font-black text-blue-800 uppercase mb-2 block">घटक (Ingredients)</label>
-                      <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center">
+                       <div className="flex flex-wrap gap-1.5 p-2 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[40px] items-center">
                         {localIngredients.length === 0 && <span className="text-[10px] font-bold text-slate-400 italic px-2">No ingredients selected or available.</span>}
                         {localIngredients.map(item => (
-                          <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2">
+                           <span key={item} className="bg-white border-2 border-blue-100 px-2 py-0.5 rounded-lg text-[9px] font-black text-blue-700 uppercase flex items-center gap-1.5">
                             {item} <Trash2 size={14} className="cursor-pointer text-blue-400" onClick={() => handleRemoveIngredient(item)} />
                           </span>
                         ))}
@@ -498,17 +482,16 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
               </>
             )}
 
-            <div className="sticky lg:relative bottom-0 bg-white/95 backdrop-blur-xl border-t lg:border-none p-5 lg:p-0 flex flex-col gap-3 z-30">
+             <div className="sticky lg:relative bottom-0 bg-white/95 backdrop-blur-xl border-t lg:border-none p-3 lg:p-0 flex flex-col gap-2 z-30">
               <button 
                 onClick={handleProcessConsumption} 
-                disabled={loading || (!isHoliday && localMainFoods.length === 0)} 
-                className="w-full bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-black py-5 rounded-3xl flex justify-center items-center gap-4 text-xs md:text-sm uppercase tracking-[0.2em] transition-all shadow-xl disabled:bg-slate-300"
+                disabled={loading || (!isHoliday && localMainFoods.length === 0)}                 className="w-full bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-black py-3.5 rounded-2xl flex justify-center items-center gap-4 text-xs md:text-sm uppercase tracking-[0.2em] transition-all shadow-xl disabled:bg-slate-300"
               >
                 {loading ? <Loader2 className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
                 {isHoliday ? 'Submit Holiday' : (isEditing ? 'Update Entry' : 'Post Consumption')}
               </button>
               {isEditing && (
-                <button onClick={handleDeleteLog} className="w-full bg-red-50 hover:bg-red-500 text-red-600 hover:text-white border-2 border-red-100 font-extrabold py-3 rounded-2xl text-[10px] uppercase tracking-widest transition-all flex justify-center items-center gap-2 active:scale-95">
+                 <button onClick={handleDeleteLog} className="w-full bg-red-50 hover:bg-red-500 text-red-600 hover:text-white border-2 border-red-100 font-extrabold py-2 rounded-xl text-[10px] uppercase tracking-widest transition-all flex justify-center items-center gap-2 active:scale-95">
                   <Trash2 size={16} /> Delete & Reset Stock
                 </button>
               )}
@@ -518,36 +501,110 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
 
           {/* Impact/Visual Side */}
           {!isHoliday && (
-            <div className="p-5 md:p-10 bg-[#474379] text-white overflow-hidden relative">
+            <div className="p-4 sm:p-6 bg-[#474379] text-white overflow-hidden relative">
                <Utensils className="absolute -right-4 -bottom-4 text-white/5" size={120} />
-               <h3 className="text-[11px] md:text-sm font-black uppercase tracking-widest mb-10 flex items-center gap-3"><ArrowRight size={24} className="text-blue-400" /> Projected Inventory Impact</h3>
-               <div className="space-y-4 relative z-10 no-scrollbar overflow-y-auto max-h-[500px]">
-                  {[...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
-                    const req = calculateRequirement(item);
-                    const avl = liveStockMap[item] || (foodNameMap[item] ? liveStockMap[foodNameMap[item]] : 0) || 0;
-                    const balanceAfter = avl - req;
-                    const isBorrowed = balanceAfter < 0;
-                    const pct = avl > 0 ? Math.max(0, Math.min(100, (balanceAfter / avl) * 100)) : 0;
+                <h3 className="text-[11px] md:text-xs font-black uppercase tracking-widest mb-6 flex items-center gap-3"><ArrowRight size={20} className="text-blue-400" /> Projected Inventory Impact</h3>
+                <div className="space-y-4 relative z-10 no-scrollbar overflow-y-auto max-h-[500px] pr-2">
+                  {/* Primary Section */}
+                  {(Number(primaryCount) > 0) && (
+                    <div className="space-y-3">
+                       <h4 className="text-[9px] font-black text-blue-300 uppercase tracking-[0.2em] border-b border-white/10 pb-1.5">Impact (Primary I-V)</h4>
+                      {[...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
+                        const req = calculateRequirement(item, 'primary');
+                        if (req === 0) return null;
+                        const stockP = inventory.find(i => (i.item_name === item || i.item_code === item) && i.standard_group === 'primary');
+                        const avl = stockP ? Number(stockP.current_balance) : 0;
+                        const balanceAfter = avl - req;
+                        const isBorrowed = balanceAfter < 0;
 
-                    return (
-                      <div key={item} className={`p-4 border group transition-all rounded-2xl ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/10 border-white/10'}`}>
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-[12px] font-black uppercase">{item}</span>
-                          <span className="text-[10px] font-bold text-white/60">REQ: {req.toFixed(2)} KG</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 bg-white/10 overflow-hidden rounded-full">
-                             {/* eslint-disable-next-line */}
-                             {/* webhint-disable no-inline-styles */}
-                             <div className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : 'bg-green-400'}`} style={{ width: `${pct}%` }} />
+                        const getWidthClass = (ratioVal: number) => {
+                          if (ratioVal <= 0) return 'w-0';
+                          if (ratioVal <= 0.1) return 'w-[10%]';
+                          if (ratioVal <= 0.2) return 'w-[20%]';
+                          if (ratioVal <= 0.3) return 'w-[30%]';
+                          if (ratioVal <= 0.4) return 'w-[40%]';
+                          if (ratioVal <= 0.5) return 'w-1/2';
+                          if (ratioVal <= 0.6) return 'w-[60%]';
+                          if (ratioVal <= 0.7) return 'w-[70%]';
+                          if (ratioVal <= 0.8) return 'w-[80%]';
+                          if (ratioVal <= 0.9) return 'w-[90%]';
+                          return 'w-full';
+                        };
+                        const ratio = avl > 0 ? (balanceAfter / avl) : 0;
+
+                        return (
+                           <div key={`${item}-p`} className={`p-3 border transition-all rounded-xl ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/5 border-white/5'}`}>
+                            <div className="flex justify-between items-center mb-2">
+                              <span className="text-[11px] font-black uppercase text-white">{item}</span>
+                              <span className="text-[9px] font-bold text-white/50">REQ: {req.toFixed(3)} KG</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 h-1 bg-white/10 overflow-hidden rounded-full">
+                                 <div className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : 'bg-blue-400'} ${getWidthClass(ratio)}`} />
+                              </div>
+                              <span className={`text-[9px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/70'}`}>
+                                {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(3)} KG` : `${balanceAfter.toFixed(3)} KG`}
+                              </span>
+                            </div>
                           </div>
-                          <span className={`text-[10px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/80'}`}>
-                            {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(2)} KG उसने` : `${balanceAfter.toFixed(2)} KG REM`}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Upper Primary Section */}
+                  {(Number(upperCount) > 0) && (
+                    <div className="space-y-3">
+                       <h4 className="text-[9px] font-black text-amber-300 uppercase tracking-[0.2em] border-b border-white/10 pb-1.5">Impact (Upper VI-VIII)</h4>
+                      {[...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
+                        const req = calculateRequirement(item, 'upper_primary');
+                        if (req === 0) return null;
+                        const stockU = inventory.find(i => (i.item_name === item || i.item_code === item) && i.standard_group === 'upper_primary');
+                        const avl = stockU ? Number(stockU.current_balance) : 0;
+                        const balanceAfter = avl - req;
+                        const isBorrowed = balanceAfter < 0;
+                        
+                        const getWidthClass = (ratioVal: number) => {
+                          if (ratioVal <= 0) return 'w-0';
+                          if (ratioVal <= 0.1) return 'w-[10%]';
+                          if (ratioVal <= 0.2) return 'w-[20%]';
+                          if (ratioVal <= 0.3) return 'w-[30%]';
+                          if (ratioVal <= 0.4) return 'w-[40%]';
+                          if (ratioVal <= 0.5) return 'w-1/2';
+                          if (ratioVal <= 0.6) return 'w-[60%]';
+                          if (ratioVal <= 0.7) return 'w-[70%]';
+                          if (ratioVal <= 0.8) return 'w-[80%]';
+                          if (ratioVal <= 0.9) return 'w-[90%]';
+                          return 'w-full';
+                        };
+                        const ratio = avl > 0 ? (balanceAfter / avl) : 0;
+
+                        return (
+                           <div key={`${item}-u`} className={`p-3 border transition-all rounded-xl ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/5 border-white/5'}`}>
+                            <div className="flex justify-between items-center mb-2">
+                              <span className="text-[11px] font-black uppercase text-white">{item}</span>
+                              <span className="text-[9px] font-bold text-white/50">REQ: {req.toFixed(3)} KG</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 h-1 bg-white/10 overflow-hidden rounded-full">
+                                 <div className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : 'bg-amber-400'} ${getWidthClass(ratio)}`} />
+                              </div>
+                              <span className={`text-[9px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/70'}`}>
+                                {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(3)} KG` : `${balanceAfter.toFixed(3)} KG`}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {(!primaryCount && !upperCount) && (
+                    <div className="flex flex-col items-center justify-center py-20 text-white/20">
+                      <Calculator size={48} className="mb-4" />
+                      <p className="text-[10px] font-black uppercase tracking-[0.2em]">Enter Attendance</p>
+                    </div>
+                  )}
                </div>
             </div>
           )}

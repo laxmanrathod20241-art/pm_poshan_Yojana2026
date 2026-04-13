@@ -62,7 +62,7 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
   ];
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-50 via-white to-orange-50 overflow-hidden font-['Inter']">
+    <div className="flex flex-col h-screen print:h-auto w-full bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-50 via-white to-orange-50 overflow-hidden print:overflow-visible font-['Inter']">
       
       {/* Glassmorphism Global Header */}
       {/* Glassmorphism Global Header - Sticky on Mobile */}
@@ -97,7 +97,7 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
       </header>
 
       {/* Main Body Split */}
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className="flex flex-1 print:flex-none overflow-hidden print:overflow-visible relative print:h-auto">
         
         {/* Mobile menu overlay */}
         {isMobileMenuOpen && (
@@ -208,7 +208,7 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
         </aside>
 
         {/* Main Content Workspace */}
-        <main className="flex-1 flex flex-col relative z-0 w-full h-full print:p-0 print:m-0 print:w-full print:max-w-none print:bg-white overflow-hidden">
+        <main className="flex-1 flex flex-col relative z-0 w-full h-full print:h-auto print:p-0 print:m-0 print:w-full print:max-w-none print:bg-white overflow-hidden print:overflow-visible">
           
           {/* Page Header Ribbon - Compressed on Mobile */}
           <div className="flex-shrink-0 print:hidden relative z-10 w-full">
@@ -219,7 +219,7 @@ export default function Layout({ children, hideFooter, sidebarLinks }: LayoutPro
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:px-8 md:py-6 relative flex flex-col">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden print:overflow-visible p-3 md:px-8 md:py-6 relative flex flex-col print:h-auto">
             {children}
             {!hideFooter && (
               <footer className="mt-auto py-3 text-center text-[10px] text-slate-500 border-t border-slate-100 print:hidden">
