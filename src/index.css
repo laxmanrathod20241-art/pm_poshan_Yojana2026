@@ -1,31 +1,41 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --primary: 210 70% 39%; /* PM-POSHAN Blue #3c8dbc */
-  --secondary: 245 29% 37%; /* Enterprise Purple #474379 */
-  --accent: 35 91% 52%; /* Safety Orange #f39c12 */
-  --success: 153 100% 33%; /* #00a65a */
-  --danger: 4 72% 54%; /* #dd4b39 */
+  --primary: 210 70% 39%;
+  /* PM-POSHAN Blue #3c8dbc */
+  --secondary: 245 29% 37%;
+  /* Enterprise Purple #474379 */
+  --accent: 35 91% 52%;
+  /* Safety Orange #f39c12 */
+  --success: 153 100% 33%;
+  /* #00a65a */
+  --danger: 4 72% 54%;
+  /* #dd4b39 */
 }
 
 @layer base {
   body {
     @apply font-['Inter'] text-slate-900 antialiased bg-slate-50;
   }
-  h1, h2, h3, h4, h5, h6 {
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     @apply font-['Outfit'] tracking-tight;
   }
 }
 
 @layer components {
   .glass-panel {
-    @apply bg-white/70 backdrop-blur-md border border-white/40 shadow-[0_8px_30px_rgb(0,0,0,0.04)];
+    @apply bg-white/70 backdrop-blur-md border border-white/40 shadow-[0_8px_30px_rgb(0, 0, 0, 0.04)];
   }
-  
+
   .btn-primary {
     @apply bg-[#3c8dbc] hover:bg-[#347aa3] text-white font-black px-6 py-2.5 rounded-none transition-all shadow-md active:scale-95 uppercase tracking-widest text-xs;
   }
@@ -37,7 +47,7 @@
   .btn-success {
     @apply bg-[#00a65a] hover:bg-[#008d4c] text-white font-black px-6 py-2.5 rounded-none transition-all shadow-md active:scale-95 uppercase tracking-widest text-xs;
   }
-  
+
   .input-field {
     @apply w-full border border-slate-300 p-2.5 text-sm font-medium focus:outline-none focus:border-[#3c8dbc] focus:ring-1 focus:ring-[#3c8dbc] transition-shadow text-[#2d3748] bg-white rounded-none;
   }
@@ -47,9 +57,11 @@
 ::-webkit-scrollbar {
   width: 8px;
 }
+
 ::-webkit-scrollbar-track {
   @apply bg-slate-100;
 }
+
 ::-webkit-scrollbar-thumb {
   @apply bg-slate-300 rounded-full hover:bg-slate-400 transition-colors;
 }

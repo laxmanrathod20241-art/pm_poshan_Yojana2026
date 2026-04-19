@@ -1,6 +1,6 @@
 -- SECURITY HARDENING & MULTI-TENANT ISOLATION
 -- Project: PM-POSHAN Tracker
--- Objective: 100% Data Isolation via Supabase RLS
+-- Objective: 100% Data Isolation via Local Postgres RLS
 
 -- 1. PROFILES Table (auth.uid() matches id)
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -45,7 +45,7 @@ BEGIN
     -- Enable RLS
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', v_table_name);
     
-    -- Drop existing permissive policies
+    -- Run this in Local Postgres SQL Editor to fix missing column errors
     EXECUTE format('DROP POLICY IF EXISTS "All operations locked to teacher_id" ON %I', v_table_name);
     
     -- Create strict policy

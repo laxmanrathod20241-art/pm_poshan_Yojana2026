@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/apiClient';
 import { calculateConsumedKg } from '../utils/inventoryUtils';
 import Layout from '../components/Layout';
+import { useAuth } from '../contexts/AuthProvider';
 import type { Database } from '../types/database.types';
 import {
   Calculator,
@@ -11,7 +12,9 @@ import {
   ArrowRight,
   Loader2,
   RefreshCcw,
-  Trash2
+  Trash2,
+  CreditCard,
+  Lock
 } from 'lucide-react';
 
 type InventoryStock = Database['public']['Tables']['inventory_stock']['Row'];
@@ -21,12 +24,13 @@ type MenuSchedule = Database['public']['Tables']['menu_weekly_schedule']['Row'];
 type EnrollmentEntity = Database['public']['Tables']['student_enrollment']['Row'];
 
 interface MenuTemplate {
-  mainFoods: string[];
-  ingredients: string[];
+  mainFoods: { name: string; code: string }[];
+  ingredients: { name: string; code: string }[];
 }
 
 export default function ConsumptionLog() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const userId = user?.id || null;
   const [loading, setLoading] = useState(false);
   const [primaryCount, setPrimaryCount] = useState<number | ''>('');
   const [upperCount, setUpperCount] = useState<number | ''>('');
@@ -37,8 +41,8 @@ export default function ConsumptionLog() {
   const [scheduledMenu, setScheduledMenu] = useState<MenuTemplate | null>(null);
   
   // Form State (The Override Layer)
-  const [localMainFoods, setLocalMainFoods] = useState<string[]>([]);
-  const [localIngredients, setLocalIngredients] = useState<string[]>([]);
+  const [localMainFoods, setLocalMainFoods] = useState<{name: string, code: string}[]>([]);
+  const [localIngredients, setLocalIngredients] = useState<{name: string, code: string}[]>([]);
   
   const [inventory, setInventory] = useState<InventoryStock[]>([]);
   const [status, setStatus] = useState({ type: '', text: '' });
@@ -72,10 +76,10 @@ export default function ConsumptionLog() {
       const scheduleType = weekNumber % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
 
       const [menuRes, masterRes, enrollmentRes, existingRes] = await Promise.all([
-        supabase.from('menu_weekly_schedule').select('*').eq('teacher_id', userId).eq('day_name', stringDay).eq('week_pattern', scheduleType).eq('is_active', true).returns<MenuSchedule[]>().maybeSingle(),
-        supabase.from('menu_master').select('item_code, item_name, item_category').eq('teacher_id', userId).returns<MenuItemMaster[]>(),
-        supabase.from('student_enrollment').select('*').eq('teacher_id', userId).returns<EnrollmentEntity[]>().maybeSingle(),
-        supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).returns<ConsumptionLogEntry[]>().maybeSingle()
+        api.from('menu_weekly_schedule').select('*').eq('teacher_id', userId).eq('day_name', stringDay).eq('week_pattern', scheduleType).eq('is_active', true).returns<MenuSchedule[]>().maybeSingle(),
+        api.from('menu_master').select('item_code, item_name, item_category, grams_primary, grams_upper_primary').eq('teacher_id', userId).returns<MenuItemMaster[]>(),
+        api.from('student_enrollment').select('*').eq('teacher_id', userId).returns<EnrollmentEntity[]>().maybeSingle(),
+        api.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).returns<ConsumptionLogEntry[]>().maybeSingle()
       ]);
 
       if (masterRes.data) {
@@ -95,11 +99,11 @@ export default function ConsumptionLog() {
       if (menuRes.data) {
         const scheduledMainFoods = (menuRes.data.main_food_codes || []).map((code: string) => {
           const item = masterRes.data?.find((m: any) => m.item_code === code);
-          return item ? item.item_name : code;
+          return item ? { name: item.item_name, code: item.item_code } : { name: code, code: code };
         });
         const scheduledIngredients = (menuRes.data.menu_items || []).map((code: string) => {
           const item = masterRes.data?.find((m: any) => m.item_code === code);
-          return item ? item.item_name : code;
+          return item ? { name: item.item_name, code: item.item_code } : { name: code, code: code };
         });
         template = { mainFoods: scheduledMainFoods, ingredients: scheduledIngredients };
         setScheduledMenu(template);
@@ -109,15 +113,22 @@ export default function ConsumptionLog() {
         setIsEditing(true);
         setPrimaryCount(existingRes.data.meals_served_primary || '');
         setUpperCount(existingRes.data.meals_served_upper_primary || '');
-        setLocalMainFoods(existingRes.data.main_foods_all || (existingRes.data.main_food ? [existingRes.data.main_food] : []));
-        setLocalIngredients(existingRes.data.ingredients_used || []);
+        
+        // Map names back to objects with codes
+        const findObj = (name: string) => {
+          const m = masterRes.data?.find(x => x.item_name === name);
+          return m ? { name: m.item_name, code: m.item_code } : { name, code: name };
+        };
+
+        setLocalMainFoods((existingRes.data.main_foods_all || (existingRes.data.main_food ? [existingRes.data.main_food] : [])).map(findObj));
+        setLocalIngredients((existingRes.data.ingredients_used || []).map(findObj));
       } else if (template) {
         setIsEditing(false);
         setLocalMainFoods(template.mainFoods);
         setLocalIngredients(template.ingredients);
       }
 
-      const { data: stock } = await supabase.from('inventory_stock').select('*').eq('teacher_id', userId).returns<InventoryStock[]>();
+      const { data: stock } = await api.from('inventory_stock').select('*').eq('teacher_id', userId).returns<InventoryStock[]>();
       setInventory(stock || []);
     } catch (err: any) {
       console.error('Fetch Error:', err);
@@ -127,22 +138,24 @@ export default function ConsumptionLog() {
   };
 
   const handleRemoveMainFood = (name: string) => {
-    setLocalMainFoods(prev => prev.filter(i => i !== name));
+    setLocalMainFoods(prev => prev.filter(i => i.name !== name));
   };
 
   const handleAddMainFood = (name: string) => {
-    if (name && !localMainFoods.includes(name)) {
-      setLocalMainFoods(prev => [...prev, name]);
+    const item = masterMainFoods.find(m => m.item_name === name);
+    if (item && !localMainFoods.find(i => i.code === item.item_code)) {
+      setLocalMainFoods(prev => [...prev, { name: item.item_name, code: item.item_code }]);
     }
   };
 
   const handleRemoveIngredient = (name: string) => {
-    setLocalIngredients(prev => prev.filter(i => i !== name));
+    setLocalIngredients(prev => prev.filter(i => i.name !== name));
   };
 
   const handleAddIngredient = (name: string) => {
-    if (name && !localIngredients.includes(name)) {
-      setLocalIngredients(prev => [...prev, name]);
+    const item = masterIngredients.find(m => m.item_name === name);
+    if (item && !localIngredients.find(i => i.code === item.item_code)) {
+      setLocalIngredients(prev => [...prev, { name: item.item_name, code: item.item_code }]);
     }
   };
 
@@ -154,17 +167,17 @@ export default function ConsumptionLog() {
   };
 
   const isOverridden = scheduledMenu && (
-    JSON.stringify([...localMainFoods].sort()) !== JSON.stringify([...scheduledMenu.mainFoods].sort()) ||
-    JSON.stringify([...localIngredients].sort()) !== JSON.stringify([...scheduledMenu.ingredients].sort())
+    JSON.stringify([...localMainFoods.map(i => i.code)].sort()) !== JSON.stringify([...scheduledMenu.mainFoods.map(i => i.code)].sort()) ||
+    JSON.stringify([...localIngredients.map(i => i.code)].sort()) !== JSON.stringify([...scheduledMenu.ingredients.map(i => i.code)].sort())
   );
 
-  const calculateRequirement = () => {
+  const calculateRequirement = (gramsP: number, gramsU: number) => {
     if (!primaryCount && !upperCount) return 0;
     return calculateConsumedKg(
       Number(primaryCount || 0),
       Number(upperCount || 0),
-      GRAMS_PRIMARY,
-      GRAMS_UPPER
+      gramsP,
+      gramsU
     );
   };
 
@@ -182,19 +195,28 @@ export default function ConsumptionLog() {
       return;
     }
 
-    // BORROWED STOCK CHECK
-    const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
-    const foundDeficits: {name: string, deficit: number}[] = [];
-    const deductKg = calculateRequirement();
+    // Fetch LATEST stock from DB to avoid stale UI state issues
+    const { data: latestStock } = await api.from('inventory_stock').select('*').eq('teacher_id', userId).returns<InventoryStock[]>();
+    const currentInventory = latestStock || inventory;
 
-    newItems.forEach(item => {
-      const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
+    const newItems = Array.from(new Set([...localMainFoods.map(i => i.code), ...localIngredients.map(i => i.code)])).filter(Boolean);
+    const foundDeficits: {name: string, deficit: number}[] = [];
+
+    newItems.forEach(code => {
+      const mItem = [...masterMainFoods, ...masterIngredients].find(m => m.item_code === code);
+      if (!mItem) return;
+
+      const deductKg = calculateRequirement(Number(mItem.grams_primary || 0), Number(mItem.grams_upper_primary || 0));
+      
+      // Strict matching: prefer code, fallback to name only if necessary
+      const currentStock = currentInventory.find(i => i.item_code === code) || currentInventory.find(i => i.item_name === mItem.item_name);
+      
       if (currentStock) {
-        const balance = Number(currentStock.current_balance);
+        const balance = Number(currentStock.current_balance || 0);
         if (balance < deductKg) {
           foundDeficits.push({
-            name: item,
-            deficit: Number((deductKg - balance).toFixed(3))
+            name: `${currentStock.item_name} (${mItem.item_category === 'MAIN' ? 'Primary' : 'Ingredient'})`,
+            deficit: Number(Math.max(0, deductKg - balance).toFixed(3))
           });
         }
       }
@@ -218,8 +240,8 @@ export default function ConsumptionLog() {
       const todayStr = new Date().toISOString().split('T')[0];
 
       const [oldConsumptionRes, existingDailyRes] = await Promise.all([
-        supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).returns<ConsumptionLogEntry[]>().maybeSingle(),
-        supabase.from('daily_logs').select('id, is_holiday').eq('teacher_id', userId).eq('log_date', todayStr).returns<any[]>().maybeSingle()
+        api.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', todayStr).returns<ConsumptionLogEntry[]>().maybeSingle(),
+        api.from('daily_logs').select('id, is_holiday').eq('teacher_id', userId).eq('log_date', todayStr).returns<any[]>().maybeSingle()
       ]);
 
       const oldConsumption = oldConsumptionRes.data;
@@ -231,16 +253,22 @@ export default function ConsumptionLog() {
           ...(oldConsumption.ingredients_used || [])
         ])).filter(Boolean);
 
-        for (const item of oldItems as string[]) {
+        for (const itemName of oldItems as string[]) {
           const oldPrimary = Number(oldConsumption.meals_served_primary || 0);
           const oldUpper = Number(oldConsumption.meals_served_upper_primary || 0);
-          const restoreKg = ((oldPrimary * GRAMS_PRIMARY) + (oldUpper * GRAMS_UPPER)) / 1000;
+          
+          // Find the item config to get the grams it USED to have
+          const mItem = [...masterMainFoods, ...masterIngredients].find(m => m.item_name === itemName || m.item_code === itemName);
+          const gramsP = Number(mItem?.grams_primary || 0);
+          const gramsU = Number(mItem?.grams_upper_primary || 0);
+          
+          const restoreKg = ((oldPrimary * gramsP) + (oldUpper * gramsU)) / 1000;
           
           if (restoreKg > 0) {
-            const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
+            const currentStock = inventory.find(i => i.item_name === itemName || i.item_code === itemName);
             if (currentStock) {
               const restoredBalance = Number(currentStock.current_balance) + restoreKg;
-              const { error: rErr } = await (supabase.from('inventory_stock') as any).update({ current_balance: restoredBalance }).eq('id', currentStock.id).eq('teacher_id', userId);
+              const { error: rErr } = await (api.from('inventory_stock') as any).update({ current_balance: restoredBalance }).eq('id', currentStock.id).eq('teacher_id', userId);
               if (rErr) throw new Error("Stock Restoration Failed: " + rErr.message);
               currentStock.current_balance = restoredBalance;
             }
@@ -248,14 +276,15 @@ export default function ConsumptionLog() {
         }
       }
 
-      const newItems = Array.from(new Set([...localMainFoods, ...localIngredients])).filter(Boolean);
+      const newItems = localMainFoods.concat(localIngredients).filter(i => i.code);
       for (const item of newItems) {
-        const deductKg = calculateRequirement();
+        const mItem = [...masterMainFoods, ...masterIngredients].find(m => m.item_code === item.code);
+        const deductKg = calculateRequirement(Number(mItem?.grams_primary || 0), Number(mItem?.grams_upper_primary || 0));
         if (deductKg > 0) {
-          const currentStock = inventory.find(i => i.item_name === item || i.item_code === item);
+          const currentStock = inventory.find(i => i.item_code === item.code);
           if (currentStock) {
             const newBalance = Number(currentStock.current_balance) - deductKg;
-            const { error: dErr } = await (supabase.from('inventory_stock') as any).update({ current_balance: newBalance }).eq('id', currentStock.id).eq('teacher_id', userId);
+            const { error: dErr } = await (api.from('inventory_stock') as any).update({ current_balance: newBalance }).eq('id', currentStock.id).eq('teacher_id', userId);
             if (dErr) throw new Error("Stock Deduction Failed: " + dErr.message);
             currentStock.current_balance = newBalance;
           }
@@ -271,10 +300,10 @@ export default function ConsumptionLog() {
       };
 
       if (verifiedDailyId) {
-        const { error: uErr } = await (supabase.from('daily_logs') as any).update(dailyPayload).eq('id', verifiedDailyId).eq('teacher_id', userId);
+        const { error: uErr } = await (api.from('daily_logs') as any).update(dailyPayload).eq('id', verifiedDailyId).eq('teacher_id', userId);
         if (uErr) throw new Error("Attendance Update Failed: " + uErr.message);
       } else {
-        const { error: iErr } = await (supabase.from('daily_logs') as any).insert([dailyPayload]);
+        const { error: iErr } = await (api.from('daily_logs') as any).insert([dailyPayload]);
         if (iErr) throw new Error("Attendance Submission Failed: " + iErr.message);
       }
 
@@ -282,19 +311,19 @@ export default function ConsumptionLog() {
         teacher_id: userId,
         meals_served_primary: Number(primaryCount || 0),
         meals_served_upper_primary: Number(upperCount || 0),
-        main_food: localMainFoods[0] || '',
-        main_foods_all: localMainFoods,
-        ingredients_used: localIngredients,
+        main_food: localMainFoods[0]?.name || '',
+        main_foods_all: localMainFoods.map(i => i.name),
+        ingredients_used: localIngredients.map(i => i.name),
         log_date: todayStr,
         is_overridden: isOverridden,
         original_template: scheduledMenu ? JSON.stringify(scheduledMenu) : null
       };
 
       if (oldConsumption) {
-        const { error: cErr } = await (supabase.from('consumption_logs') as any).update(consumptionPayload).eq('id', oldConsumption.id).eq('teacher_id', userId);
+        const { error: cErr } = await (api.from('consumption_logs') as any).update(consumptionPayload).eq('id', oldConsumption.id).eq('teacher_id', userId);
         if (cErr) throw new Error("Menu Update Failed: " + cErr.message);
       } else {
-        const { error: cErr } = await (supabase.from('consumption_logs') as any).insert([consumptionPayload]);
+        const { error: cErr } = await (api.from('consumption_logs') as any).insert([consumptionPayload]);
         if (cErr) throw new Error("Menu Submission Failed: " + cErr.message);
       }
 
@@ -316,24 +345,60 @@ export default function ConsumptionLog() {
               </h3>
 
               <div className="space-y-4">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Primary Students (I - V)</label>
-                  <input
-                    type="number" value={primaryCount}
-                    onChange={e => setPrimaryCount(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border-2 border-slate-100 p-2.5 bg-slate-50 font-black text-slate-800 text-xl focus:border-blue-500 outline-none transition-all"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Upper Primary (VI - VIII)</label>
-                  <input
-                    type="number" value={upperCount}
-                    onChange={e => setUpperCount(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border-2 border-slate-100 p-2.5 bg-slate-50 font-black text-slate-800 text-xl focus:border-blue-500 outline-none transition-all"
-                    placeholder="0"
-                  />
-                </div>
+                {user?.has_primary ? (
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Primary Students (I - V)</label>
+                    <input
+                      type="number" value={primaryCount}
+                      onChange={e => setPrimaryCount(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full border-2 border-slate-100 p-2.5 bg-slate-50 font-black text-slate-800 text-xl focus:border-blue-500 outline-none transition-all"
+                      placeholder="0"
+                    />
+                  </div>
+                ) : (
+                   <div className="group relative overflow-hidden bg-slate-50 border-2 border-dashed border-slate-200 p-4 rounded-xl flex items-center justify-between transition-all hover:border-blue-300">
+                      <div>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                          Primary (I - V) <Lock size={12} className="text-slate-300" />
+                        </p>
+                        <p className="text-[9px] font-bold text-slate-500 mt-0.5">Section not activated.</p>
+                      </div>
+                      <a href="/enrollment" className="bg-blue-600 hover:bg-blue-700 text-white text-[9px] font-black px-3 py-1.5 rounded-lg shadow-lg shadow-blue-100 flex items-center gap-1.5 uppercase transition-all active:scale-95">
+                        <CreditCard size={14} /> Upgrade
+                      </a>
+                   </div>
+                )}
+
+                {user?.has_upper_primary ? (
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Upper Primary (VI - VIII)</label>
+                    <input
+                      type="number" value={upperCount}
+                      onChange={e => setUpperCount(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full border-2 border-slate-100 p-2.5 bg-slate-50 font-black text-slate-800 text-xl focus:border-blue-500 outline-none transition-all"
+                      placeholder="0"
+                    />
+                  </div>
+                ) : (
+                   <div className="group relative overflow-hidden bg-slate-50 border-2 border-dashed border-slate-200 p-4 rounded-xl flex items-center justify-between transition-all hover:border-blue-300">
+                      <div>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                          Upper Primary (VI - VIII) <Lock size={12} className="text-slate-300" />
+                        </p>
+                        <p className="text-[9px] font-bold text-slate-500 mt-0.5">Section not activated.</p>
+                      </div>
+                      <a href="/enrollment" className="bg-blue-600 hover:bg-blue-700 text-white text-[9px] font-black px-3 py-1.5 rounded-lg shadow-lg shadow-blue-100 flex items-center gap-1.5 uppercase transition-all active:scale-95">
+                        <CreditCard size={14} /> Upgrade
+                      </a>
+                   </div>
+                )}
+                
+                {!user?.has_primary && !user?.has_upper_primary && (
+                  <div className="p-4 bg-amber-50 border-2 border-amber-100 rounded-xl text-center">
+                    <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">No active sections found.</p>
+                    <a href="/enrollment" className="mt-2 inline-block text-[10px] font-black text-blue-600 hover:underline uppercase">Go to Enrollment Registry</a>
+                  </div>
+                )}
               </div>
 
               <div className="mt-8 p-6 bg-blue-50/50 border-2 border-blue-200/50 rounded-2xl backdrop-blur-md shadow-inner space-y-6">
@@ -359,13 +424,13 @@ export default function ConsumptionLog() {
                   <div>
                     <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">आजचे मुख्य आहार</label>
                     <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center mb-3">
-                      {localMainFoods.map((item: string) => (
-                        <span key={item} className="bg-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black text-white uppercase flex items-center gap-2 shadow-md">
-                          {item}
+                      {localMainFoods.map((item: any) => (
+                        <span key={item.code} className="bg-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black text-white uppercase flex items-center gap-2 shadow-md">
+                          {item.name}
                           <Trash2 
                             size={14} 
                             className="cursor-pointer text-blue-200 hover:text-white" 
-                            onClick={() => handleRemoveMainFood(item)}
+                            onClick={() => handleRemoveMainFood(item.name)}
                           />
                         </span>
                       ))}
@@ -385,13 +450,13 @@ export default function ConsumptionLog() {
                   <div>
                     <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest mb-2 block">वापरलेले घटक</label>
                     <div className="flex flex-wrap gap-2 p-3 bg-white/50 border-2 border-dashed border-blue-100 rounded-xl min-h-[60px] items-center">
-                      {localIngredients.map((item: string) => (
-                        <span key={item} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2">
-                          {item}
+                      {localIngredients.map((item: any) => (
+                        <span key={item.code} className="bg-white border-2 border-blue-100 px-3 py-1.5 rounded-lg text-[10px] font-black text-blue-700 uppercase flex items-center gap-2">
+                          {item.name}
                           <Trash2 
                             size={14} 
                             className="cursor-pointer text-blue-400 hover:text-red-500" 
-                            onClick={() => handleRemoveIngredient(item)}
+                            onClick={() => handleRemoveIngredient(item.name)}
                           />
                         </span>
                       ))}
@@ -436,9 +501,10 @@ export default function ConsumptionLog() {
               </h3>
 
               <div className="space-y-4 relative z-10">
-                {[...localMainFoods, ...localIngredients].filter(Boolean).map((item: string) => {
-                  const req = calculateRequirement();
-                  const stock = inventory.find(i => i.item_name === item);
+                {[...localMainFoods, ...localIngredients].filter(i => i.code).map((item) => {
+                  const mItem = [...masterMainFoods, ...masterIngredients].find(m => m.item_code === item.code);
+                  const req = calculateRequirement(Number(mItem?.grams_primary || 0), Number(mItem?.grams_upper_primary || 0));
+                  const stock = inventory.find(i => i.item_code === item.code);
                   const balanceAfter = stock ? stock.current_balance - req : 0;
                   const isLow = balanceAfter < 5 && balanceAfter >= 0;
                   const isBorrowed = balanceAfter < 0;
@@ -459,9 +525,9 @@ export default function ConsumptionLog() {
                   const ratio = balanceAfter / (stock?.current_balance || 1);
 
                   return (
-                    <div key={item} className={`p-4 border group transition-all ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/10 border-white/10'}`}>
+                    <div key={item.code} className={`p-4 border group transition-all ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/10 border-white/10'}`}>
                       <div className="flex justify-between items-center mb-2">
-                        <span className="text-[12px] font-black uppercase">{item}</span>
+                        <span className="text-[12px] font-black uppercase">{item.name}</span>
                         <span className="text-[10px] font-bold text-white/60">REQ: {req.toFixed(2)} KG</span>
                       </div>
                       <div className="flex items-center gap-2">

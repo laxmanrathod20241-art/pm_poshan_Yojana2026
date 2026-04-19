@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/apiClient';
 import { reconstructOpeningBalances, formatQuantity } from '../utils/inventoryUtils';
 import Layout from '../components/Layout';
+import { useAuth } from '../contexts/AuthProvider';
 import { Loader2, Printer, RefreshCw, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type { Database } from '../types/database.types';
 
@@ -16,10 +17,12 @@ interface MenuItem {
   grams_primary: number;
   grams_upper_primary: number;
   item_category: 'MAIN' | 'INGREDIENT';
+  sort_rank?: number;
 }
 
 export default function CreditLedgerReport() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const userId = user?.id || null;
   const [isSyncing, setIsSyncing] = useState(false);
 
   const marathiMonths = ['जानेवारी', 'फेब्रुवारी', 'मार्च', 'एप्रिल', 'मे', 'जून', 'जुलै', 'ऑगस्ट', 'सप्टेंबर', 'ऑक्टोबर', 'नोव्हेंबर', 'डिसेंबर'];
@@ -36,19 +39,17 @@ export default function CreditLedgerReport() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [creditData, setCreditData] = useState<any>(null);
   const [inventoryBalances, setInventoryBalances] = useState<Record<string, number>>({});
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchProfile(session.user.id);
-      }
-    });
-  }, []);
+    if (userId) {
+      fetchProfile(userId);
+    }
+  }, [userId]);
 
   const fetchProfile = async (uid: string) => {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from('profiles')
         .select('school_name_mr, has_primary, has_upper_primary')
         .eq('id', uid)
@@ -85,12 +86,24 @@ export default function CreditLedgerReport() {
 
     try {
       // 2. Fetch Menu Master for columns
-      const { data: menuMaster } = await supabase.from('menu_master').select('*').eq('teacher_id', id).order('created_at', { ascending: true });
-      const items: MenuItem[] = (menuMaster as MenuItem[]) || [];
+      const { data: menuMasterRaw } = await api.from('menu_master').select('*').eq('teacher_id', id);
+      const items: MenuItem[] = ((menuMasterRaw || []) as any[]).sort((a, b) => {
+        // Priority 1: Category (MAIN before INGREDIENT)
+        if (a.item_category === 'MAIN' && b.item_category !== 'MAIN') return -1;
+        if (a.item_category !== 'MAIN' && b.item_category === 'MAIN') return 1;
+        
+        // Priority 2: Sort Rank (Ascending)
+        const rankA = a.sort_rank ?? 999;
+        const rankB = b.sort_rank ?? 999;
+        if (rankA !== rankB) return rankA - rankB;
+        
+        // Fallback: Name
+        return (a.item_name || '').localeCompare(b.item_name || '');
+      });
       setMenuItems(items);
 
       // 3. Fetch Live Inventory (for repayment status) - Filtered by scope
-      const { data: currentStock } = await supabase
+      const { data: currentStock } = await api
         .from('inventory_stock')
         .select('item_name, current_balance')
         .eq('teacher_id', id)
@@ -110,7 +123,7 @@ export default function CreditLedgerReport() {
       const nextMonthStart = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
 
       // A. Opening Balances (From previous month report snapshot)
-      const { data: prevSnapshot } = await supabase
+      const { data: prevSnapshot } = await api
         .from('monthly_reports')
         .select('report_data')
         .eq('teacher_id', id)
@@ -131,8 +144,8 @@ export default function CreditLedgerReport() {
 
       // C. Daily Logs & Consumption
       const [logsRes, consumptionRes] = await Promise.all([
-        supabase.from('daily_logs').select('*').eq('teacher_id', id).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart),
-        supabase.from('consumption_logs').select('*').eq('teacher_id', id).eq('standard_group', scope).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart)
+        api.from('daily_logs').select('*').eq('teacher_id', id).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart),
+        api.from('consumption_logs').select('*').eq('teacher_id', id).eq('standard_group', scope).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart)
       ]);
 
       const logs = (logsRes.data as DailyLog[]) || [];
@@ -192,8 +205,12 @@ export default function CreditLedgerReport() {
     } catch (e) {
       console.error("Credit report error:", e);
     } finally {
-      setLoading(false);
-      setIsSyncing(false);
+      // Add a tiny delay so the user sees the spin on fast local connections
+      setTimeout(() => {
+        setLoading(false);
+        setIsSyncing(false);
+        setLastSynced(new Date().toLocaleTimeString());
+      }, 500);
     }
   };
 
@@ -245,12 +262,19 @@ export default function CreditLedgerReport() {
               </div>
             )}
 
-            <button
-              onClick={() => fetchCreditData(userId!, selectedMonth, selectedYear, true, selectedScope)}
-              className="bg-amber-50 text-amber-700 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 hover:bg-amber-100 transition-all border border-amber-200"
-            >
-              <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} /> Sync Live
-            </button>
+            <div className="flex flex-col items-end">
+              <button
+                onClick={() => fetchCreditData(userId!, selectedMonth, selectedYear, true, selectedScope)}
+                className="bg-amber-50 text-amber-700 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 hover:bg-amber-100 transition-all border border-amber-200"
+              >
+                <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} /> Sync Live
+              </button>
+              {lastSynced && (
+                <span className="text-[9px] font-bold text-slate-400 mt-1 uppercase tracking-tighter">
+                  Last Sync: {lastSynced}
+                </span>
+              )}
+            </div>
             <button onClick={() => window.print()} className="bg-slate-900 text-white px-6 py-2 rounded-lg font-black text-xs uppercase flex items-center gap-2 shadow-lg">
               <Printer size={16} /> Print Register
             </button>
@@ -372,6 +396,48 @@ export default function CreditLedgerReport() {
                       ))
                     )}
                   </tbody>
+                  <tfoot className="print:table-footer-group">
+                    {/* Summary Row 1: Total Credit Used */}
+                    <tr className="bg-amber-50 font-black">
+                      <td colSpan={4} className="border border-slate-800 p-3 font-black text-right uppercase tracking-wider text-amber-900">
+                        एकूण मासिक उसणे वापरलेले (TOTAL MONTHLY CREDIT):
+                      </td>
+                      {menuItems.map(item => (
+                        <td key={item.item_code} className="border border-slate-800 p-2 font-black text-amber-700">
+                          {formatQuantity(creditData?.totals[item.item_code])}
+                        </td>
+                      ))}
+                    </tr>
+                    {/* Summary Row 2: Repaid Status */}
+                    <tr className="bg-slate-50">
+                      <td colSpan={4} className="border border-slate-800 p-2 font-black text-right uppercase tracking-wider text-slate-500">
+                        भरपाई स्थिती (REPAYMENT STATUS):
+                      </td>
+                      {menuItems.map(item => {
+                        const balance = inventoryBalances[item.item_name] || 0;
+                        const borrowedQty = creditData?.totals[item.item_code] || 0;
+                        const isRepaid = borrowedQty > 0 && balance >= borrowedQty;
+
+                        return (
+                          <td key={item.item_code} className="border border-slate-800 p-2">
+                            {borrowedQty > 0 ? (
+                              isRepaid ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <CheckCircle2 size={12} className="text-green-600" />
+                                  <span className="text-[8px] font-black text-green-600">Repaid</span>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <RefreshCw size={12} className="text-amber-500 animate-pulse" />
+                                  <span className="text-[8px] font-black text-amber-600">Pending</span>
+                                </div>
+                              )
+                            ) : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
 

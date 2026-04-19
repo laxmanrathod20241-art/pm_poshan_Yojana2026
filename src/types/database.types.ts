@@ -6,7 +6,7 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-export interface Database {
+export type Database = {
   public: {
     Tables: {
       schools: {
@@ -71,6 +71,12 @@ export interface Database {
           center_name_mr: string | null
           has_primary: boolean | null
           has_upper_primary: boolean | null
+          is_onboarded: boolean | null
+          onboarding_step: number | null
+          saas_payment_status: string | null
+          saas_plan_type: string | null
+          saas_expiry_date: string | null
+          saas_amount_paid: number | null
           created_at: string | null
         }
         Insert: {
@@ -85,6 +91,12 @@ export interface Database {
           center_name_mr?: string | null
           has_primary?: boolean | null
           has_upper_primary?: boolean | null
+          is_onboarded?: boolean | null
+          onboarding_step?: number | null
+          saas_payment_status?: string | null
+          saas_plan_type?: string | null
+          saas_expiry_date?: string | null
+          saas_amount_paid?: number | null
           created_at?: string | null
         }
         Update: {
@@ -99,6 +111,12 @@ export interface Database {
           center_name_mr?: string | null
           has_primary?: boolean | null
           has_upper_primary?: boolean | null
+          is_onboarded?: boolean | null
+          onboarding_step?: number | null
+          saas_payment_status?: string | null
+          saas_plan_type?: string | null
+          saas_expiry_date?: string | null
+          saas_amount_paid?: number | null
           created_at?: string | null
         }
       }
@@ -112,6 +130,7 @@ export interface Database {
           grams_upper_primary: number | null
           item_category: string | null
           source: string | null
+          sort_rank: number | null
           created_at: string
         }
         Insert: {
@@ -123,6 +142,7 @@ export interface Database {
           grams_upper_primary?: number | null
           item_category?: string | null
           source?: string | null
+          sort_rank?: number | null
           created_at?: string
         }
         Update: {
@@ -134,6 +154,7 @@ export interface Database {
           grams_upper_primary?: number | null
           item_category?: string | null
           source?: string | null
+          sort_rank?: number | null
           created_at?: string
         }
       }
@@ -335,13 +356,13 @@ export interface Database {
           teacher_id: string
           staff_name: string
           post_name: string
-          payment_type: string
+          payment_type: "per_student" | "per_day" | "monthly"
           rate_primary: number
           rate_upper: number
           monthly_cost: number
           record_month: number
           record_year: number
-          standard_group: string | null
+          standard_group: string
           created_at: string
         }
         Insert: {
@@ -349,13 +370,13 @@ export interface Database {
           teacher_id: string
           staff_name: string
           post_name: string
-          payment_type?: string
+          payment_type: "per_student" | "per_day" | "monthly"
           rate_primary?: number
           rate_upper?: number
           monthly_cost: number
           record_month: number
           record_year: number
-          standard_group?: string | null
+          standard_group?: string
           created_at?: string
         }
         Update: {
@@ -363,13 +384,13 @@ export interface Database {
           teacher_id?: string
           staff_name?: string
           post_name?: string
-          payment_type?: string
+          payment_type?: "per_student" | "per_day" | "monthly"
           rate_primary?: number
           rate_upper?: number
           monthly_cost?: number
           record_month?: number
           record_year?: number
-          standard_group?: string | null
+          standard_group?: string
           created_at?: string
         }
       }
@@ -385,7 +406,7 @@ export interface Database {
           monthly_cost: number
           record_month: number
           record_year: number
-          standard_group: string | null
+          standard_group: string
           created_at: string
         }
         Insert: {
@@ -399,7 +420,7 @@ export interface Database {
           monthly_cost: number
           record_month: number
           record_year: number
-          standard_group?: string | null
+          standard_group?: string
           created_at?: string
         }
         Update: {
@@ -413,7 +434,7 @@ export interface Database {
           monthly_cost?: number
           record_month?: number
           record_year?: number
-          standard_group?: string | null
+          standard_group?: string
           created_at?: string
         }
       }
@@ -583,6 +604,61 @@ export interface Database {
           created_at?: string
         }
       }
+      payment_receipts: {
+        Row: {
+          id: string
+          teacher_id: string
+          receipt_date: string
+          amount: number
+          section_type: string
+          remarks: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          teacher_id: string
+          receipt_date: string
+          amount: number
+          section_type?: string
+          remarks?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          teacher_id?: string
+          receipt_date?: string
+          amount?: number
+          section_type?: string
+          remarks?: string | null
+          created_at?: string
+        }
+      }
+      financial_ledger_snapshots: {
+        Row: {
+          id: string
+          teacher_id: string
+          fiscal_year: number
+          section_type: string
+          ledger_data: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          teacher_id: string
+          fiscal_year: number
+          section_type?: string
+          ledger_data: Json
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          teacher_id?: string
+          fiscal_year?: number
+          section_type?: string
+          ledger_data?: Json
+          created_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
@@ -598,3 +674,6 @@ export interface Database {
     }
   }
 }
+
+export type Tables<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row'];
+export type Enums<T extends keyof Database['public']['Enums']> = Database['public']['Enums'][T];

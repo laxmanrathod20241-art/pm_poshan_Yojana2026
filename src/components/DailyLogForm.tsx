@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { calculateConsumedKg } from '../utils/inventoryUtils';
-import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/apiClient';
 import type { Database } from '../types/database.types';
+import { useAuth } from '../contexts/AuthProvider';
 import { 
   Calculator, 
   CheckCircle2, 
@@ -11,7 +12,8 @@ import {
   Loader2,
   X,
   Trash2,
-  RefreshCcw 
+  RefreshCcw,
+  Lock
 } from 'lucide-react';
 
 type InventoryStock = Database['public']['Tables']['inventory_stock']['Row'];
@@ -33,7 +35,8 @@ interface DailyLogFormProps {
 }
 
 export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLogFormProps) {
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const userId = user?.id || null;
   const [loading, setLoading] = useState(false);
   const [primaryCount, setPrimaryCount] = useState<string>('');
   const [upperCount, setUpperCount] = useState<string>('');
@@ -63,15 +66,10 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   // Borrowed Stock States
   const [showBorrowedModal, setShowBorrowedModal] = useState(false);
   const [deficitItems, setDeficitItems] = useState<{name: string, deficit: number}[]>([]);
+  const [isOrphan, setIsOrphan] = useState(false);
 
   const GRAMS_PRIMARY = 100; 
   const GRAMS_UPPER = 150;
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) setUserId(session.user.id);
-    });
-  }, []);
 
   useEffect(() => {
     if (userId) {
@@ -87,28 +85,24 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
     try 
     {
       const [masterRes, enrollmentRes, existingLogRes, consumptionLogRes, profileRes] = await Promise.all([
-        supabase.from('menu_master').select('*').eq('teacher_id', userId).returns<MenuItemMaster[]>(),
-        supabase.from('student_enrollment').select('*').eq('teacher_id', userId).returns<EnrollmentEntity[]>().maybeSingle(),
-        supabase.from('daily_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<DailyLog[]>().maybeSingle(),
-        supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<ConsumptionLogEntry[]>().maybeSingle(),
-        supabase.from('profiles').select('has_primary, has_upper_primary').eq('id', userId).returns<any[]>().maybeSingle()
+        api.from('menu_master').select('*').eq('teacher_id', userId).returns<MenuItemMaster[]>(),
+        api.from('student_enrollment').select('*').eq('teacher_id', userId).returns<EnrollmentEntity>().maybeSingle(),
+        api.from('daily_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<DailyLog>().maybeSingle(),
+        api.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<ConsumptionLogEntry>().maybeSingle(),
+        api.from('profiles').select('has_primary, has_upper_primary').eq('id', userId).returns<any>().maybeSingle()
       ]);
 
-      console.log("DailyLogForm Init Trace:", {
+      console.log("DailyLogForm Diagnostic:", {
         targetDate,
-        masterCount: masterRes.data?.length || 0,
-        hasEnrollment: !!enrollmentRes.data,
-        hasExistingLog: !!existingLogRes.data,
-        hasConsumption: !!consumptionLogRes.data,
-        hasProfile: !!profileRes.data
+        enrollmentData: enrollmentRes.data,
+        profileData: profileRes.data,
+        masterCount: masterRes.data?.length || 0
       });
-
 
       const mapping: Record<string, string> = {};
       const gramsMap: Record<string, {primary: number, upper: number}> = {};
       
       if (masterRes.data) {
-        console.log("Fetched Master Menu Items:", masterRes.data);
         setMasterMainFoods(masterRes.data.filter((i: any) => String(i.item_category).toUpperCase() === 'MAIN'));
         setMasterIngredients(masterRes.data.filter((i: any) => String(i.item_category).toUpperCase() === 'INGREDIENT'));
         masterRes.data.forEach((m: any) => {
@@ -120,12 +114,15 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         setFoodGramsMap(gramsMap);
       }
 
+      // Calculate enrollment totals once
+      let ePrimary = 0;
+      let eUpper = 0;
       if (enrollmentRes.data) {
         const e = enrollmentRes.data;
-        setEnrollment({
-          primary: (e.std_1 || 0) + (e.std_2 || 0) + (e.std_3 || 0) + (e.std_4 || 0) + (e.std_5 || 0),
-          upper: (e.std_6 || 0) + (e.std_7 || 0) + (e.std_8 || 0)
-        });
+        ePrimary = (Number(e.std_1) || 0) + (Number(e.std_2) || 0) + (Number(e.std_3) || 0) + (Number(e.std_4) || 0) + (Number(e.std_5) || 0);
+        eUpper = (Number(e.std_6) || 0) + (Number(e.std_7) || 0) + (Number(e.std_8) || 0);
+        setEnrollment({ primary: ePrimary, upper: eUpper });
+        console.log("Registry Counts Loaded:", { ePrimary, eUpper });
       }
 
       if (profileRes.data) {
@@ -141,51 +138,76 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const stringDay = dayNames[dayOfWeek];
       
-      // Calculate Week 1, 2, 3, 4 of the CURRENT MONTH, not the year.
       const dateOfMonth = targetDateObj.getDate();
       const weekNum = Math.ceil(dateOfMonth / 7);
       const scheduleType = weekNum % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
       
-      const { data: menu } = await supabase
+      const { data: menu } = await api
         .from('menu_weekly_schedule')
         .select('*')
         .eq('teacher_id', userId)
         .eq('week_pattern', scheduleType)
         .eq('day_name', stringDay)
         .eq('is_active', true)
-        .returns<MenuSchedule[]>()
-        .maybeSingle();
+        .returns<MenuSchedule>().maybeSingle();
       
       let templateMF: string[] = [];
       let templateIng: string[] = [];
       if (menu) {
-        templateMF = (menu.main_food_codes || []).map((code: string) => mapping[code] || code);
-        templateIng = (menu.menu_items || []).map((code: string) => mapping[code] || code);
+        templateMF = (menu.main_food_codes || []).map((code: string) => mapping[code]).filter(Boolean) as string[];
+        templateIng = (menu.menu_items || []).map((code: string) => mapping[code]).filter(Boolean) as string[];
         setScheduledMenu({ mainFoods: templateMF, ingredients: templateIng });
       }
 
       if (existingLogRes.data) {
+        console.log("Existing Log Data:", existingLogRes.data);
         setIsEditing(true);
         setExistingLogId(existingLogRes.data.id);
         setIsHoliday(existingLogRes.data.is_holiday || false);
         setHolidayRemarks(existingLogRes.data.holiday_remarks || '');
-        setPrimaryCount(existingLogRes.data.meals_served_primary != null ? String(existingLogRes.data.meals_served_primary) : '');
-        setUpperCount(existingLogRes.data.meals_served_upper_primary != null ? String(existingLogRes.data.meals_served_upper_primary) : '');
+        
+        // Populate counts - if they were zero but registry has data, and user wants auto-fill
+        const savedP = existingLogRes.data.meals_served_primary;
+        const savedU = existingLogRes.data.meals_served_upper_primary;
+        
+        setPrimaryCount(savedP != null ? String(savedP) : '');
+        setUpperCount(savedU != null ? String(savedU) : '');
         
         if (consumptionLogRes.data) {
-          setLocalMainFoods(consumptionLogRes.data.main_foods_all || (consumptionLogRes.data.main_food ? [consumptionLogRes.data.main_food] : []));
-          setLocalIngredients(consumptionLogRes.data.ingredients_used || []);
+          const validMF = (consumptionLogRes.data.main_foods_all || (consumptionLogRes.data.main_food ? [consumptionLogRes.data.main_food] : [])).filter(name => !!gramsMap[name]);
+          const validIng = (consumptionLogRes.data.ingredients_used || []).filter(name => !!gramsMap[name]);
+          setLocalMainFoods(validMF);
+          setLocalIngredients(validIng);
         } else {
           setLocalMainFoods(templateMF);
           setLocalIngredients(templateIng);
         }
       } else {
-        setIsEditing(false);
-        setLocalMainFoods(templateMF);
-        setLocalIngredients(templateIng);
+        // Check for Orphans (Consumption data exists without a Daily Log record)
+        if (consumptionLogRes.data) {
+          setIsOrphan(true);
+          const validMF = (consumptionLogRes.data.main_foods_all || (consumptionLogRes.data.main_food ? [consumptionLogRes.data.main_food] : [])).filter(name => !!gramsMap[name]);
+          const validIng = (consumptionLogRes.data.ingredients_used || []).filter(name => !!gramsMap[name]);
+          setLocalMainFoods(validMF);
+          setLocalIngredients(validIng);
+          setPrimaryCount(String(consumptionLogRes.data.meals_served_primary || 0));
+          setUpperCount(String(consumptionLogRes.data.meals_served_upper_primary || 0));
+        } else {
+          setIsOrphan(false);
+          console.log("New Log Entry. Filling with Registry:", { ePrimary, eUpper });
+          setIsEditing(false);
+          if (profileRes.data?.has_primary !== false) {
+            setPrimaryCount(String(ePrimary));
+          }
+          if (profileRes.data?.has_upper_primary !== false) {
+            setUpperCount(String(eUpper));
+          }
+          setLocalMainFoods(templateMF);
+          setLocalIngredients(templateIng);
+        }
       }
 
-      const { data: stock } = await supabase.from('inventory_stock').select('*').eq('teacher_id', userId).returns<InventoryStock[]>();
+      const { data: stock } = await api.from('inventory_stock').select('*').eq('teacher_id', userId).returns<InventoryStock[]>();
       setInventory(stock || []);
     } catch (err: any) {
       console.error(err);
@@ -196,7 +218,8 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
 
   const calculateRequirement = (itemIdentifier?: string, scope?: 'primary' | 'upper_primary') => {
     if (!primaryCount && !upperCount) return 0;
-    const grams = (itemIdentifier && foodGramsMap[itemIdentifier]) || { primary: GRAMS_PRIMARY, upper: GRAMS_UPPER };
+    const grams = (itemIdentifier && foodGramsMap[itemIdentifier]);
+    if (!grams) return 0; // Prevent calculation for ghost/unassigned items
     
     if (scope === 'primary') {
       return (Number(primaryCount || 0) * grams.primary) / 1000;
@@ -244,11 +267,11 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         return;
       }
       if (hasPrimary && enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) {
-        setStatus({ type: 'error', text: 'प्राथमिक उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.' });
+        setStatus({ type: 'error', text: 'उपस्थिती एकूण पटसंख्येपेक्षा जास्त असू शकत नाही' });
         return;
       }
       if (hasUpperPrimary && enrollment.upper > 0 && Number(upperCount) > enrollment.upper) {
-        setStatus({ type: 'error', text: 'उच्च प्राथमिक उपस्थिती पटसंख्येपेक्षा जास्त असू शकत नाही.' });
+        setStatus({ type: 'error', text: 'उपस्थिती एकूण पटसंख्येपेक्षा जास्त असू शकत नाही' });
         return;
       }
 
@@ -298,7 +321,7 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
         gramsUpperMap[name] = g.upper || 0;
       });
 
-      const { error } = await (supabase.rpc as any)('process_daily_consumption', {
+      const { error } = await (api.rpc as any)('process_daily_consumption', {
         p_teacher_id: userId,
         p_log_date: targetDate,
         p_is_holiday: isHoliday,
@@ -326,30 +349,81 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
   };
 
   const handleDeleteLog = async () => {
-    if (!existingLogId || !window.confirm("Are you sure? Stock will be restored.")) return;
+    if (!existingLogId || !window.confirm("Are you sure? Stock will be restored and this entry will be removed from all reports.")) return;
     setLoading(true);
     try {
-      const { data: oldConsumption } = await supabase.from('consumption_logs').select('*').eq('teacher_id', userId).eq('log_date', targetDate).returns<ConsumptionLogEntry[]>().maybeSingle();
+      // 1. Fetch the consumption log to know what to restore
+      const { data: oldConsumption } = await api.from('consumption_logs')
+        .select('*')
+        .eq('teacher_id', userId)
+        .eq('log_date', targetDate)
+        .returns<ConsumptionLogEntry>().maybeSingle();
+      
       if (oldConsumption) {
-        const itemsToRestore = Array.from(new Set([...(oldConsumption.main_foods_all || [oldConsumption.main_food]), ...(oldConsumption.ingredients_used || [])])).filter(Boolean);
+        // 2. Attempt Stock Restoration (Non-blocking for the whole process)
+        const itemsToRestore = Array.from(new Set([
+          ...(oldConsumption.main_foods_all || (oldConsumption.main_food ? [oldConsumption.main_food] : [])), 
+          ...(oldConsumption.ingredients_used || [])
+        ])).filter(Boolean);
+
         for (const item of itemsToRestore as string[]) {
-          const grams = foodGramsMap[item] || { primary: GRAMS_PRIMARY, upper: GRAMS_UPPER };
-          const kgToRestore = ((Number(oldConsumption.meals_served_primary || 0) * grams.primary) + (Number(oldConsumption.meals_served_upper_primary || 0) * grams.upper)) / 1000;
-          if (kgToRestore > 0) {
-            const currentStock = inventory.find(i => i.item_name === item || i.item_code === item || (foodNameMap[item] && i.item_name === foodNameMap[item]));
-            if (currentStock) {
-              const newBalance = Number(currentStock.current_balance) + kgToRestore;
-              const { error: updErr } = await (supabase.from('inventory_stock') as any).update({ current_balance: newBalance }).eq('id', currentStock.id);
-              if (updErr) throw updErr;
+          try {
+            const grams = foodGramsMap[item] || { primary: GRAMS_PRIMARY, upper: GRAMS_UPPER };
+            const kgToRestore = ((Number(oldConsumption.meals_served_primary || 0) * grams.primary) + (Number(oldConsumption.meals_served_upper_primary || 0) * grams.upper)) / 1000;
+            
+            if (kgToRestore > 0) {
+              const currentStock = inventory.find(i => i.item_name === item || i.item_code === item || (foodNameMap[item] && i.item_name === foodNameMap[item]));
+              if (currentStock) {
+                const newBalance = Number(currentStock.current_balance) + kgToRestore;
+                await (api.from('inventory_stock') as any).update({ current_balance: newBalance }).eq('id', currentStock.id);
+              }
             }
+          } catch (restoreErr) {
+            console.error(`Failed to restore stock for ${item}:`, restoreErr);
           }
         }
-        await (supabase.from('consumption_logs') as any).delete().eq('id', oldConsumption.id);
       }
-      await (supabase.from('daily_logs') as any).delete().eq('id', existingLogId);
-      setStatus({ type: 'success', text: "Log deleted & stock restored." });
+      
+      // 3. Delete ALL Consumption Logs for this date (ALWAYS run to clear orphans)
+      await (api.from('consumption_logs') as any)
+        .delete()
+        .eq('teacher_id', userId)
+        .eq('log_date', targetDate);
+      
+      // 4. Delete ALL Daily Logs for this date (Main Record)
+      await (api.from('daily_logs') as any)
+        .delete()
+        .eq('teacher_id', userId)
+        .eq('log_date', targetDate);
+
+      // 5. Clear all relevant report snapshots to force recalculation
+      const dateParts = targetDate.split('-');
+      const month = parseInt(dateParts[1]);
+      const year = parseInt(dateParts[0]);
+      
+      // Clear Monthly Reports & Daily Ledger Snapshots
+      await (api.from('monthly_reports') as any)
+        .delete()
+        .eq('teacher_id', userId)
+        .eq('report_month', month)
+        .eq('report_year', year);
+
+      // Clear Mandhan Snapshots (fuel/veg totals depend on meals served)
+      await (api.from('monthly_mandhan') as any)
+        .delete()
+        .eq('teacher_id', userId)
+        .eq('report_month', month)
+        .eq('report_year', year);
+
+      // Clear Item Ledger Snapshots (These often cover a range, so we clear the teacher's cache to be safe)
+      await (api.from('item_ledger_reports') as any)
+        .delete()
+        .eq('teacher_id', userId);
+
+      setStatus({ type: 'success', text: "नोंद डिलीट केली आणि रिपोर्ट रिसेट केले!" });
       setTimeout(() => { onSuccess(); onClose(); }, 1200);
     } catch (err: any) {
+      console.error("Delete Error:", err);
       setStatus({ type: 'error', text: "Error deleting log: " + err.message });
     } finally {
       setLoading(false);
@@ -370,6 +444,32 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
             <p className="text-white/40 font-bold tracking-widest text-[9px] uppercase">Consumption Engine</p>
           </div>
         </div>
+
+        <div className="flex items-center gap-6 relative z-10">
+            {/* Holiday Toggle in Header */}
+            <label className="flex items-center gap-3 cursor-pointer group">
+               <div className="relative">
+                 <input 
+                   type="checkbox" 
+                   className="sr-only peer" 
+                   checked={isHoliday} 
+                   onChange={e => { 
+                     setIsHoliday(e.target.checked); 
+                     if (e.target.checked) { 
+                       setPrimaryCount('0'); 
+                       setUpperCount('0'); 
+                       setLocalMainFoods([]); 
+                       setLocalIngredients([]); 
+                     } 
+                   }} 
+                 />
+                 <div className="w-10 h-5 bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-400"></div>
+               </div>
+               <span className="text-[10px] font-black text-white uppercase tracking-widest group-hover:text-blue-300 transition-colors">
+                 {isHoliday ? 'शाळा सुट्टी आहे (Holiday)' : 'शाळेला सुट्टी असेल तर येथे क्लिक करा'}
+               </span>
+            </label>
+
             <button 
                   onClick={onClose} 
                   aria-label="Close form" 
@@ -378,27 +478,40 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                 >
                   <X size={24} />
             </button>
+        </div>
       </div>
 
-      <div className="flex-1 no-scrollbar">
-        {/* Toggle Section */}
-         <div className="px-4 sm:px-8 py-3 bg-indigo-50/50 border-b border-indigo-100 flex flex-col md:flex-row gap-3 items-center">
-          <div className="flex items-center gap-4 w-full md:w-auto">
-             <div className="p-3 bg-indigo-100 text-indigo-700 rounded-2xl">
-                <AlertTriangle size={20} />
-             </div>
-             <label className="flex items-center gap-4 cursor-pointer group flex-1">
-               <div className="relative">
-                 <input type="checkbox" className="sr-only peer" checked={isHoliday} onChange={e => { setIsHoliday(e.target.checked); if (e.target.checked) { setPrimaryCount('0'); setUpperCount('0'); setLocalMainFoods([]); setLocalIngredients([]); } }} />
-                 <div className="w-14 h-8 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-blue-600"></div>
-               </div>
-               <span className="text-[11px] md:text-sm font-black text-indigo-900 uppercase tracking-widest italic group-hover:text-blue-600 transition-colors">
-                 {isHoliday ? 'शाळा सुट्टी आहे (Holiday Active)' : 'शाळा सुरू आहे (School Open)'}
-               </span>
-             </label>
+      {isOrphan && (
+        <div className="mx-4 sm:mx-8 mt-4 mb-2 bg-amber-50 border-2 border-amber-200 p-4 rounded-2xl flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-3">
+            <div className="bg-amber-100 p-2 rounded-full text-amber-600 flex-shrink-0"><AlertTriangle size={20} /></div>
+            <div>
+              <p className="text-amber-900 text-[10px] font-black uppercase tracking-tight">⚠️ "ऑर्फन" डेटा सापडला (Orphan Data Found)</p>
+              <p className="text-amber-700 text-[9px] font-bold leading-tight mt-0.5">या दिवसाची नोंद रजिस्टरमध्ये नाही, पण साठा वापरला गेला आहे. यामुळे रिपोर्टमध्ये फरक येतोय.</p>
+            </div>
           </div>
-          {isHoliday && <input type="text" value={holidayRemarks} onChange={e => setHolidayRemarks(e.target.value)} placeholder="कारण (Name of Holiday)" className="w-full md:flex-1 p-4 text-sm font-black border-2 border-indigo-200 bg-white rounded-2xl outline-none shadow-inner" />}
+          <button 
+            onClick={handleDeleteLog} 
+            className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase shadow-lg transition-all active:scale-95 whitespace-nowrap"
+          >
+            दुरुस्त करा (Clear)
+          </button>
         </div>
+      )}
+
+      <div className="flex-1 no-scrollbar">
+        {/* Holiday Remarks Section (Only visible when it is a holiday) */}
+        {isHoliday && (
+          <div className="px-4 sm:px-8 py-3 bg-indigo-50/50 border-b border-indigo-100 flex flex-col md:flex-row gap-3 items-center">
+             <div className="flex items-center gap-4 w-full md:w-auto">
+                <div className="p-3 bg-indigo-100 text-indigo-700 rounded-2xl">
+                    <AlertTriangle size={20} />
+                </div>
+                <div className="text-[11px] font-black text-indigo-900 uppercase">सुट्टीचे कारण लिहा:</div>
+              </div>
+            <input type="text" value={holidayRemarks} onChange={e => setHolidayRemarks(e.target.value)} placeholder="कारण (Name of Holiday)" className="w-full md:flex-1 p-4 text-sm font-black border-2 border-indigo-200 bg-white rounded-2xl outline-none shadow-inner" />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2">
           {/* Form Side */}
@@ -408,17 +521,51 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                 <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
                   <Calculator size={18} className="text-[#3c8dbc]" /> Attendance Input
                 </h3>
-                <div className={`grid ${hasPrimary && hasUpperPrimary ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
-                   {hasPrimary && (
-                    <div className="bg-white p-3.5 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
-                       <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Primary (I-V)</label>
-                       <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-xl font-black bg-white border-none outline-none ${(enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                <div className="grid grid-cols-2 gap-4">
+                   {hasPrimary ? (
+                    <div className="bg-white p-3.5 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300 relative group/input">
+                        <div className="flex justify-between items-center mb-2">
+                           <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Primary (I-V)</label>
+                           {enrollment.primary > 0 && (
+                             <button 
+                               type="button"
+                               onClick={() => setPrimaryCount(String(enrollment.primary))}
+                               className="text-[8px] font-black text-blue-500 uppercase flex items-center gap-1 hover:text-blue-700 transition-colors"
+                               title="Sync with Registry"
+                             >
+                               Reg: {enrollment.primary} <RefreshCcw size={8} />
+                             </button>
+                           )}
+                        </div>
+                        <input type="number" value={primaryCount} onChange={e => setPrimaryCount(e.target.value)} max={enrollment.primary} disabled={!hasActiveSchedule} className={`w-full text-xl font-black bg-white border-none outline-none ${(enrollment.primary > 0 && Number(primaryCount) > enrollment.primary) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 p-3.5 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col justify-between opacity-80">
+                       <label className="text-[9px] font-black text-slate-400 uppercase block mb-1 tracking-widest flex items-center gap-1.5">Primary <Lock size={10} /></label>
+                       <a href="/enrollment" className="text-[9px] font-black text-blue-600 uppercase hover:underline">Activate</a>
                     </div>
                   )}
-                   {hasUpperPrimary && (
-                    <div className="bg-white p-3.5 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300">
-                       <label className="text-[9px] font-black text-slate-400 uppercase block mb-2 tracking-widest">Upper (VI-VIII)</label>
-                       <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} disabled={!hasActiveSchedule} className={`w-full text-xl font-black bg-white border-none outline-none ${(enrollment.upper > 0 && Number(upperCount) > enrollment.upper) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                   {hasUpperPrimary ? (
+                    <div className="bg-white p-3.5 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 transition-all animate-in zoom-in-95 duration-300 relative group/input">
+                        <div className="flex justify-between items-center mb-2">
+                           <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Upper (VI-VIII)</label>
+                           {enrollment.upper > 0 && (
+                             <button 
+                               type="button"
+                               onClick={() => setUpperCount(String(enrollment.upper))}
+                               className="text-[8px] font-black text-amber-500 uppercase flex items-center gap-1 hover:text-amber-700 transition-colors"
+                               title="Sync with Registry"
+                             >
+                               Reg: {enrollment.upper} <RefreshCcw size={8} />
+                             </button>
+                           )}
+                        </div>
+                        <input type="number" value={upperCount} onChange={e => setUpperCount(e.target.value)} max={enrollment.upper} disabled={!hasActiveSchedule} className={`w-full text-xl font-black bg-white border-none outline-none ${(enrollment.upper > 0 && Number(upperCount) > enrollment.upper) ? 'text-red-600' : 'text-slate-800'}`} placeholder="0" />
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 p-3.5 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col justify-between opacity-80">
+                       <label className="text-[9px] font-black text-slate-400 uppercase block mb-1 tracking-widest flex items-center gap-1.5">Upper <Lock size={10} /></label>
+                       <a href="/enrollment" className="text-[9px] font-black text-blue-600 uppercase hover:underline">Activate</a>
                     </div>
                   )}
                 </div>
@@ -483,13 +630,16 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
             )}
 
              <div className="sticky lg:relative bottom-0 bg-white/95 backdrop-blur-xl border-t lg:border-none p-3 lg:p-0 flex flex-col gap-2 z-30">
-              <button 
-                onClick={handleProcessConsumption} 
-                disabled={loading || (!isHoliday && localMainFoods.length === 0)}                 className="w-full bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-black py-3.5 rounded-2xl flex justify-center items-center gap-4 text-xs md:text-sm uppercase tracking-[0.2em] transition-all shadow-xl disabled:bg-slate-300"
-              >
-                {loading ? <Loader2 className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
-                {isHoliday ? 'Submit Holiday' : (isEditing ? 'Update Entry' : 'Post Consumption')}
-              </button>
+              {!isEditing && (
+                <button 
+                  onClick={handleProcessConsumption} 
+                  disabled={loading || (!isHoliday && localMainFoods.length === 0)} 
+                  className="w-full bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-black py-3.5 rounded-2xl flex justify-center items-center gap-4 text-xs md:text-sm uppercase tracking-[0.2em] transition-all shadow-xl disabled:bg-slate-300"
+                >
+                  {loading ? <Loader2 className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
+                  {isHoliday ? 'Submit Holiday' : 'Post Consumption'}
+                </button>
+              )}
               {isEditing && (
                  <button onClick={handleDeleteLog} className="w-full bg-red-50 hover:bg-red-500 text-red-600 hover:text-white border-2 border-red-100 font-extrabold py-2 rounded-xl text-[10px] uppercase tracking-widest transition-all flex justify-center items-center gap-2 active:scale-95">
                   <Trash2 size={16} /> Delete & Reset Stock
@@ -506,10 +656,10 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                 <h3 className="text-[11px] md:text-xs font-black uppercase tracking-widest mb-6 flex items-center gap-3"><ArrowRight size={20} className="text-blue-400" /> Projected Inventory Impact</h3>
                 <div className="space-y-4 relative z-10 no-scrollbar overflow-y-auto max-h-[500px] pr-2">
                   {/* Primary Section */}
-                  {(Number(primaryCount) > 0) && (
+                  {hasPrimary && (
                     <div className="space-y-3">
                        <h4 className="text-[9px] font-black text-blue-300 uppercase tracking-[0.2em] border-b border-white/10 pb-1.5">Impact (Primary I-V)</h4>
-                      {[...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
+                      {Number(primaryCount) > 0 ? [...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
                         const req = calculateRequirement(item, 'primary');
                         if (req === 0) return null;
                         const stockP = inventory.find(i => (i.item_name === item || i.item_code === item) && i.standard_group === 'primary');
@@ -533,30 +683,34 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                         const ratio = avl > 0 ? (balanceAfter / avl) : 0;
 
                         return (
-                           <div key={`${item}-p`} className={`p-3 border transition-all rounded-xl ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/5 border-white/5'}`}>
-                            <div className="flex justify-between items-center mb-2">
-                              <span className="text-[11px] font-black uppercase text-white">{item}</span>
-                              <span className="text-[9px] font-bold text-white/50">REQ: {req.toFixed(3)} KG</span>
+                           <div key={`${item}-p`} className={`p-2 border transition-all rounded-lg ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/5 border-white/5'}`}>
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-[10px] font-black uppercase text-white truncate max-w-[120px]">{item}</span>
+                              <span className="text-[8px] font-bold text-white/50">REQ: {req.toFixed(3)} KG</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-1 bg-white/10 overflow-hidden rounded-full">
                                  <div className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : 'bg-blue-400'} ${getWidthClass(ratio)}`} />
                               </div>
-                              <span className={`text-[9px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/70'}`}>
-                                {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(3)} KG` : `${balanceAfter.toFixed(3)} KG`}
+                              <span className={`text-[8px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/70'}`}>
+                                {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(3)}` : `${balanceAfter.toFixed(3)} KG`}
                               </span>
                             </div>
                           </div>
                         );
-                      })}
+                      }) : (
+                        <div className="py-8 text-center border border-dashed border-white/5 rounded-xl opacity-30">
+                           <p className="text-[8px] font-black uppercase tracking-widest italic">Attendance Missing</p>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   {/* Upper Primary Section */}
-                  {(Number(upperCount) > 0) && (
+                  {hasUpperPrimary && (
                     <div className="space-y-3">
                        <h4 className="text-[9px] font-black text-amber-300 uppercase tracking-[0.2em] border-b border-white/10 pb-1.5">Impact (Upper VI-VIII)</h4>
-                      {[...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
+                      {Number(upperCount) > 0 ? [...localMainFoods, ...localIngredients].filter(Boolean).map(item => {
                         const req = calculateRequirement(item, 'upper_primary');
                         if (req === 0) return null;
                         const stockU = inventory.find(i => (i.item_name === item || i.item_code === item) && i.standard_group === 'upper_primary');
@@ -580,22 +734,26 @@ export default function DailyLogForm({ targetDate, onClose, onSuccess }: DailyLo
                         const ratio = avl > 0 ? (balanceAfter / avl) : 0;
 
                         return (
-                           <div key={`${item}-u`} className={`p-3 border transition-all rounded-xl ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/5 border-white/5'}`}>
-                            <div className="flex justify-between items-center mb-2">
-                              <span className="text-[11px] font-black uppercase text-white">{item}</span>
-                              <span className="text-[9px] font-bold text-white/50">REQ: {req.toFixed(3)} KG</span>
+                           <div key={`${item}-u`} className={`p-2 border transition-all rounded-lg ${isBorrowed ? 'bg-red-500/20 border-red-500/40' : 'bg-white/5 border-white/5'}`}>
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-[10px] font-black uppercase text-white truncate max-w-[120px]">{item}</span>
+                              <span className="text-[8px] font-bold text-white/50">REQ: {req.toFixed(3)} KG</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-1 bg-white/10 overflow-hidden rounded-full">
                                  <div className={`h-full transition-all duration-500 ${isBorrowed ? 'bg-red-500' : 'bg-amber-400'} ${getWidthClass(ratio)}`} />
                               </div>
-                              <span className={`text-[9px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/70'}`}>
-                                {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(3)} KG` : `${balanceAfter.toFixed(3)} KG`}
+                              <span className={`text-[8px] font-black ${isBorrowed ? 'text-red-400' : 'text-white/70'}`}>
+                                {isBorrowed ? `⚠️ ${Math.abs(balanceAfter).toFixed(3)}` : `${balanceAfter.toFixed(3)} KG`}
                               </span>
                             </div>
                           </div>
                         );
-                      })}
+                      }) : (
+                        <div className="py-8 text-center border border-dashed border-white/5 rounded-xl opacity-30">
+                           <p className="text-[8px] font-black uppercase tracking-widest italic">Attendance Missing</p>
+                        </div>
+                      )}
                     </div>
                   )}
 

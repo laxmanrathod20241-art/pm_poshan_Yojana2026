@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/apiClient';
 import Layout from '../components/Layout';
+import { useAuth } from '../contexts/AuthProvider';
 import { Loader2, Save, Printer, RefreshCw, FileText, AlertCircle } from 'lucide-react';
 import { useReactToPrint } from 'react-to-print';
+import { getFinancialYearStart } from '../utils/inventoryUtils';
 import type { Database } from '../types/database.types';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -18,6 +20,7 @@ interface MenuItem {
   grams_primary: number;
   grams_upper_primary: number;
   item_category: 'MAIN' | 'INGREDIENT';
+  sort_rank?: number;
 }
 
 interface ScheduleRow {
@@ -66,7 +69,8 @@ interface LedgerData {
 
 
 export default function DailyLedgerReport() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const userId = user?.id || null;
   const [loading, setLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
@@ -80,7 +84,7 @@ export default function DailyLedgerReport() {
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
 
   const marathiMonths = ['जानेवारी', 'फेब्रुवारी', 'मार्च', 'एप्रिल', 'मे', 'जून', 'जुलै', 'ऑगस्ट', 'सप्टेंबर', 'ऑक्टोबर', 'नोव्हेंबर', 'डिसेंबर'];
-  const years = ['2024', '2025', '2026', '2027'];
+  const years = ['2023', '2024', '2025', '2026', '2027', '2028', '2029', '2030'];
 
   const handlePrint = useReactToPrint({
     contentRef: printRef,
@@ -98,7 +102,7 @@ export default function DailyLedgerReport() {
 
   const fetchProfile = async (uid: string) => {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from('profiles')
         .select('school_name_mr, center_name_mr, has_primary, has_upper_primary')
         .eq('id', uid)
@@ -125,14 +129,11 @@ export default function DailyLedgerReport() {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchProfile(session.user.id);
-        fetchLedgerData(session.user.id, selectedMonth, selectedYear, false, selectedScope);
-      }
-    });
-  }, [selectedMonth, selectedYear, selectedScope]);
+    if (userId) {
+      fetchProfile(userId);
+      fetchLedgerData(userId, selectedMonth, selectedYear, false, selectedScope);
+    }
+  }, [userId, selectedMonth, selectedYear, selectedScope]);
 
   const fetchLedgerData = async (id: string, month: number, year: number, forceSync = false, scope = selectedScope) => {
     setLoading(!forceSync);
@@ -146,7 +147,7 @@ export default function DailyLedgerReport() {
 
     try {
       // 1. Check if an official snapshot already exists for Daily Ledger
-      const { data: snapshot } = await supabase
+      const { data: snapshot } = await api
         .from('monthly_reports')
         .select('*')
         .eq('teacher_id', id)
@@ -159,7 +160,7 @@ export default function DailyLedgerReport() {
       // 2. Fetch Profile Info (Already handled by fetchProfile(id) on mount/refresh)
 
       // 2b. Fetch Enrollment
-      const { data: enrollment } = await supabase
+      const { data: enrollment } = await api
         .from('student_enrollment')
         .select('std_1,std_2,std_3,std_4,std_5,std_6,std_7,std_8')
         .eq('teacher_id', id)
@@ -174,13 +175,25 @@ export default function DailyLedgerReport() {
       }
 
       // 3. Fetch Menu Master strictly for column mapping
-      const { data: menuMaster } = await supabase
+      const { data: menuMaster } = await api
         .from('menu_master')
         .select('*')
-        .eq('teacher_id', id)
-        .order('created_at', { ascending: true });
+        .eq('teacher_id', id);
 
-      const items: MenuItem[] = menuMaster || [];
+      const items: MenuItem[] = (menuMaster || []).sort((a, b) => {
+        // Priority 1: Category (MAIN before INGREDIENT)
+        if (a.item_category === 'MAIN' && b.item_category !== 'MAIN') return -1;
+        if (a.item_category !== 'MAIN' && b.item_category === 'MAIN') return 1;
+        
+        // Priority 2: Sort Rank (Ascending)
+        const rankA = a.sort_rank ?? 999;
+        const rankB = b.sort_rank ?? 999;
+        if (rankA !== rankB) return rankA - rankB;
+        
+        // Fallback: Name
+        return a.item_name.localeCompare(b.item_name);
+      });
+
       setMenuItems(items);
 
       if (!forceSync && snapshot && snapshot.daily_ledger_data) {
@@ -203,12 +216,11 @@ export default function DailyLedgerReport() {
       if (prevMonth === 0) { prevMonth = 12; prevYear = year - 1; }
 
       const currentMonthStart = `${year}-${String(month).padStart(2, '0')}-01`;
-      const nextMonth = month === 12 ? 1 : month + 1;
-      const nextYear = month === 12 ? year + 1 : year;
-      const nextMonthStart = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      const currentMonthEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
       // B. Opening Balances (From previous month report_data snapshot if exists)
-      const { data: prevSnapshot } = await supabase
+      const { data: prevSnapshot } = await api
         .from('monthly_reports')
         .select('report_data')
         .eq('teacher_id', id)
@@ -218,18 +230,20 @@ export default function DailyLedgerReport() {
         .returns<MonthlyReportSnapshot[]>()
         .maybeSingle();
 
+      const isApril = month === 4;
       const openingBalances: Record<string, number> = {};
-      if (prevSnapshot && prevSnapshot.report_data) {
+      if (prevSnapshot && prevSnapshot.report_data && !isApril) {
         const pData = typeof prevSnapshot.report_data === 'string'
           ? JSON.parse(prevSnapshot.report_data)
           : prevSnapshot.report_data;
         pData.forEach((row: any) => { openingBalances[row.item] = Number(row.closingBalance) || 0; });
       } else {
-        // FALLBACK: Time-Travel Historical Reconstruction
-        console.log("No previous snapshot found. Reconstructing opening balances historically...");
+        // FALLBACK: Time-Travel Historical Reconstruction (Limited to Financial Year)
+        console.log("No previous snapshot found or it's April. Reconstructing opening balances historically...");
+        const fyStart = getFinancialYearStart(currentMonthStart);
         const [histReceipts, histConsumption] = await Promise.all([
-          supabase.from('stock_receipts').select('item_name, quantity_kg').eq('teacher_id', id).eq('standard_group', scope).lt('receipt_date', currentMonthStart),
-          supabase.from('consumption_logs').select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used').eq('teacher_id', id).eq('standard_group', scope).lt('log_date', currentMonthStart)
+          api.from('stock_receipts').select('item_name, quantity_kg').eq('teacher_id', id).eq('standard_group', scope).gte('receipt_date', fyStart).lt('receipt_date', currentMonthStart),
+          api.from('consumption_logs').select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used').eq('teacher_id', id).eq('standard_group', scope).gte('log_date', fyStart).lt('log_date', currentMonthStart)
         ]);
 
         (histReceipts.data || []).forEach((r: any) => {
@@ -254,13 +268,13 @@ export default function DailyLedgerReport() {
       }
 
       // C. Stock Receipts (Received)
-      const { data: receipts } = await supabase
+      const { data: receipts } = await api
         .from('stock_receipts')
         .select('*')
         .eq('teacher_id', id)
         .eq('standard_group', scope)
         .gte('receipt_date', currentMonthStart)
-        .lt('receipt_date', nextMonthStart);
+        .lte('receipt_date', currentMonthEnd);
 
       const receivedSums: Record<string, number> = {};
       (receipts || []).forEach((r: any) => {
@@ -268,7 +282,7 @@ export default function DailyLedgerReport() {
       });
 
       // D. Menu Weekly Schedule
-      const { data: weeklySchedule } = await supabase
+      const { data: weeklySchedule } = await api
         .from('menu_weekly_schedule')
         .select('*')
         .eq('teacher_id', id);
@@ -277,10 +291,10 @@ export default function DailyLedgerReport() {
 
       // E. Daily Logs & Consumption Details
       const [logsRes, consumptionRes, staffRes, fuelRes] = await Promise.all([
-        supabase.from('daily_logs').select('*').eq('teacher_id', id).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart),
-        supabase.from('consumption_logs').select('*').eq('teacher_id', id).eq('standard_group', scope).gte('log_date', currentMonthStart).lt('log_date', nextMonthStart),
-        supabase.from('cooking_staff').select('*').eq('teacher_id', id).eq('standard_group', scope),
-        supabase.from('fuel_tracking').select('*').eq('teacher_id', id).eq('standard_group', scope)
+        api.from('daily_logs').select('*').eq('teacher_id', id).gte('log_date', currentMonthStart).lte('log_date', currentMonthEnd),
+        api.from('consumption_logs').select('*').eq('teacher_id', id).eq('standard_group', scope).gte('log_date', currentMonthStart).lte('log_date', currentMonthEnd),
+        api.from('cooking_staff').select('*').eq('teacher_id', id).eq('standard_group', scope),
+        api.from('fuel_tracking').select('*').eq('teacher_id', id).eq('standard_group', scope)
       ]);
 
       const logs = (logsRes.data as DailyLog[]) || [];
@@ -308,6 +322,14 @@ export default function DailyLedgerReport() {
       let totalFuel = 0;
       let totalVeg = 0;
 
+      // Calculate Monthly Fixed Honorarium
+      const monthlyStaffTotal = activeStaff.reduce((sum, staff) => {
+        if (staff.payment_type === 'monthly') {
+          return sum + (scope === 'primary' ? Number(staff.rate_primary || 0) : Number(staff.rate_upper || 0));
+        }
+        return sum;
+      }, 0);
+
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         const dateObj = new Date(year, month - 1, d);
@@ -330,7 +352,7 @@ export default function DailyLedgerReport() {
           formattedDate: `${d} ${marathiMonths[month - 1]}`,
           dayName: dayName,
           marathiDayName: marathiDayNames[dayName],
-          menuName: '',
+          menuName: dayName === 'Sunday' ? 'रविवार सुट्टी' : '',
           primaryAtt: 0,
           upperAtt: 0,
           honorarium: 0,
@@ -445,6 +467,9 @@ export default function DailyLedgerReport() {
 
         dailyRows.push(rowData as DailyRow);
       }
+      
+      // Add monthly fixed amount to grand total
+      totalHonorarium += monthlyStaffTotal;
 
       // Format Header Summaries
       const openRow: any = {};
@@ -503,7 +528,7 @@ export default function DailyLedgerReport() {
         daily_ledger_data: JSON.stringify(ledgerData)
       };
 
-      const { data: existing } = await supabase
+      const { data: existing } = await api
         .from('monthly_reports')
         .select('id')
         .eq('teacher_id', userId)
@@ -515,14 +540,14 @@ export default function DailyLedgerReport() {
 
       let err;
       if (existing) {
-        const res = await (supabase
+        const res = await (api
           .from('monthly_reports') as any)
           .update(payload)
           .eq('id', (existing as any).id)
           .eq('teacher_id', userId);
         err = res.error;
       } else {
-        const res = await (supabase.from('monthly_reports') as any).insert([payload]);
+        const res = await (api.from('monthly_reports') as any).insert([payload]);
         err = res.error;
       }
 
@@ -601,7 +626,7 @@ export default function DailyLedgerReport() {
                   <button
                     onClick={() => fetchLedgerData(userId!, selectedMonth, selectedYear, true)}
                     disabled={loading || isSyncing}
-                    className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 shadow-sm"
+                    className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-all flex items-center gap-2"
                     title="Sync Live Data"
                   >
                     {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -676,9 +701,14 @@ export default function DailyLedgerReport() {
               <div ref={printRef} className="print-content w-full min-w-[1200px] print:min-w-0 mx-auto print:block print:h-auto print:overflow-visible">
                 <div className="bg-white print:border-none border-2 border-slate-200 shadow-md p-8 print:p-0 w-full relative">
                   <div className="text-center mb-4 print:mb-3 border-b-2 border-black pb-3">
-                    <h1 className="text-xl md:text-2xl font-black mb-1.5 uppercase tracking-wide">
-                      प्रतिदिन शिजवलेल्या अन्नधान्याची खतावणी {selectedScope === 'primary' ? '(इ. १ ते ५ वी)' : '(इ. ६ ते ८ वी)'}
-                    </h1>
+                    <div className="mb-2">
+                      <h1 className="text-xl md:text-2xl font-black uppercase tracking-wide leading-tight">
+                        प्रधानमंत्री पोषणशक्ति निर्माण योजना {selectedScope === 'primary' ? '(इ. १ ते ५ वी)' : '(इ. ६ ते ८ वी)'}
+                      </h1>
+                      <h2 className="text-lg md:text-xl font-black uppercase tracking-wide mt-1">
+                        दैनंदिन खर्च नोंदवही (भाग - २)
+                      </h2>
+                    </div>
                     <h2 className="text-sm font-extrabold text-gray-800 leading-relaxed">
                       शाळेचे नाव: <span className="underline decoration-dotted underline-offset-4">{schoolName || '____________________'}</span>
                       <span className="mx-3">|</span>
@@ -712,20 +742,17 @@ export default function DailyLedgerReport() {
                           <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap min-w-[45px]">दिनांक</th>
                           <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap min-w-[60px]">वार</th>
                           <th className="border border-black print:border-[1px] p-2 text-center text-[10px] leading-tight min-w-[100px]">मेनूचा प्रकार</th>
-                          <th className="border border-black print:border-[1px] p-2 text-center">उपस्थिती ({selectedScope === 'primary' ? '१-५' : '६-८'})</th>
+                          <th className="border border-black print:border-[1px] p-1 text-center text-[9px] leading-tight w-[45px] min-w-[45px]">उपस्थिती<br/>({selectedScope === 'primary' ? '१-५' : '६-८'})</th>
                           {menuItems.map(m => (
                             <th
                               key={m.item_code}
-                              className="border border-slate-800 p-0.5 text-center font-bold text-[9px] leading-tight whitespace-normal break-words align-middle"
-                              style={{ minWidth: '35px' }}
+                              className="border border-slate-800 p-0.5 text-center font-bold text-[9px] leading-tight whitespace-normal break-words align-middle min-w-[35px]"
                               title={m.item_name}
                             >
                               {m.item_name}
                             </th>
                           ))}
-                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap px-3">मानधन</th>
-                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap px-3">इंधन</th>
-                          <th className="border border-black print:border-[1px] p-2 text-center whitespace-nowrap px-3">भाजीपाला</th>
+                          <th className="border border-black print:border-[1px] p-1 text-center text-[9px] leading-tight min-w-[55px] w-[55px]">इंधन आणि<br/>भाजीपाला</th>
                         </tr>
                       </thead>
 
@@ -740,8 +767,6 @@ export default function DailyLedgerReport() {
                               </td>
                             ))}
                             <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
-                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
-                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                           </tr>
                           <tr className="bg-blue-50/30 print:bg-transparent font-bold">
                             <td className="border border-black print:border-[1px] p-1.5 text-center" colSpan={4}>२) प्राप्त (Received)</td>
@@ -750,8 +775,6 @@ export default function DailyLedgerReport() {
                                 {Number(ledgerData.topSummaries.received[m.item_code]) === 0 ? '-' : ledgerData.topSummaries.received[m.item_code]}
                               </td>
                             ))}
-                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
-                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                             <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                           </tr>
                           <tr className="bg-gray-200/50 print:bg-transparent font-black">
@@ -762,11 +785,9 @@ export default function DailyLedgerReport() {
                               </td>
                             ))}
                             <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
-                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
-                            <td className="border border-black print:border-[1px] p-1.5 text-right">-</td>
                           </tr>
                           <tr>
-                            <td colSpan={5 + menuItems.length} className="border-x border-black print:border-x-[1px] h-1 bg-black/10 print:bg-transparent"></td>
+                            <td colSpan={4 + menuItems.length} className="border-x border-black print:border-x-[1px] h-1 bg-black/10 print:bg-transparent"></td>
                           </tr>
                         </>
 
@@ -775,7 +796,7 @@ export default function DailyLedgerReport() {
                             <td className="border border-black print:border-[1px] p-1.5 whitespace-nowrap min-w-[45px] font-bold text-center">{String(idx + 1).padStart(2, '0')}</td>
                             <td className="border border-black print:border-[1px] p-1.5 text-center whitespace-nowrap min-w-[60px] tracking-tighter">{row.marathiDayName}</td>
                             <td className="border border-black print:border-[1px] p-1.5 text-[10px] leading-tight min-w-[100px] break-words" title={row.menuName}>{row.menuName || '-'}</td>
-                            <td className="border border-black print:border-[1px] p-1.5 text-center font-bold">
+                            <td className="border border-black print:border-[1px] p-1 text-center font-bold text-[10px]">
                               {selectedScope === 'primary' ? (row.primaryAtt > 0 ? row.primaryAtt : '-') : (row.upperAtt > 0 ? row.upperAtt : '-')}
                             </td>
                             {menuItems.map(m => (
@@ -783,14 +804,8 @@ export default function DailyLedgerReport() {
                                 {Number(row.consumptions[m.item_code]) === 0 ? '-' : row.consumptions[m.item_code]}
                               </td>
                             ))}
-                            <td className="border border-black print:border-[1px] p-2 text-right font-bold">
-                              {Number(row.honorarium || 0) === 0 ? '-' : `₹${Number(row.honorarium).toFixed(2)}`}
-                            </td>
-                            <td className="border border-black print:border-[1px] p-2 text-right font-bold">
-                              {Number(row.fuelCost || 0) === 0 ? '-' : `₹${Number(row.fuelCost).toFixed(2)}`}
-                            </td>
-                            <td className="border border-black print:border-[1px] p-2 text-right font-bold">
-                              {Number(row.vegCost || 0) === 0 ? '-' : `₹${Number(row.vegCost).toFixed(2)}`}
+                            <td className="border border-black print:border-[1px] p-1 text-right font-bold text-[9px]">
+                              {Number((row.fuelCost || 0) + (row.vegCost || 0)) === 0 ? '-' : (Number(row.fuelCost || 0) + Number(row.vegCost || 0)).toFixed(2)}
                             </td>
                           </tr>
                         ))}
@@ -802,7 +817,7 @@ export default function DailyLedgerReport() {
                             <td className="border border-black print:border-[1px] p-2 text-center font-black uppercase tracking-wider" colSpan={3}>
                               एकूण (GRAND TOTAL)
                             </td>
-                            <td className="border border-black print:border-[1px] p-2 text-center font-black bg-blue-50/50 print:bg-transparent">
+                            <td className="border border-black print:border-[1px] p-1 text-center font-black bg-blue-50/50 print:bg-transparent text-[10px]">
                               {selectedScope === 'primary' ? ledgerData.footerTotals.primaryAtt : ledgerData.footerTotals.upperAtt}
                             </td>
                             {menuItems.map(m => (
@@ -810,9 +825,7 @@ export default function DailyLedgerReport() {
                                 {Number(ledgerData.footerTotals.consumptions[m.item_code]) === 0 ? '-' : ledgerData.footerTotals.consumptions[m.item_code]}
                               </td>
                             ))}
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">₹{Number(ledgerData.footerTotals.totalHonorarium || 0).toFixed(2)}</td>
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">₹{Number(ledgerData.footerTotals.totalFuel || 0).toFixed(2)}</td>
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">₹{Number(ledgerData.footerTotals.totalVeg || 0).toFixed(2)}</td>
+                            <td className="border border-black print:border-[1px] p-1 text-right font-black text-[9px]">{(Number(ledgerData.footerTotals.totalFuel || 0) + Number(ledgerData.footerTotals.totalVeg || 0)).toFixed(2)}</td>
                           </tr>
 
                           <tr className="bg-amber-50/50 print:bg-transparent font-black text-xs print:text-[10px]">
@@ -820,17 +833,17 @@ export default function DailyLedgerReport() {
                               ४) उसणे घेतलेले धान्य (Borrowed Stock)
                             </td>
                             {menuItems.map(m => {
-                              const tot = Number(ledgerData.topSummaries.total[m.item_code]) || 0;
+                              const op = Number(ledgerData.topSummaries.opening[m.item_code]) || 0;
+                              const rec = Number(ledgerData.topSummaries.received[m.item_code]) || 0;
+                              const available = Math.max(0, op) + rec;
                               const cons = Number(ledgerData.footerTotals.consumptions[m.item_code]) || 0;
-                              const borrowed = Number(Math.max(0, cons - tot).toFixed(2));
+                              const borrowed = Number(Math.max(0, cons - available).toFixed(2));
                               return (
                                 <td key={'borrow_' + m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black text-amber-600 print:text-black text-[10px]">
                                   {borrowed === 0 ? '-' : borrowed}
                                 </td>
                               )
                             })}
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                             <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                           </tr>
 
@@ -841,15 +854,13 @@ export default function DailyLedgerReport() {
                             {menuItems.map(m => {
                               const tot = Number(ledgerData.topSummaries.total[m.item_code]) || 0;
                               const cons = Number(ledgerData.footerTotals.consumptions[m.item_code]) || 0;
-                              const closing = Number(Math.max(0, tot - cons).toFixed(2));
+                              const closing = Number((tot - cons).toFixed(2));
                               return (
-                                <td key={'close_' + m.item_code} className="border border-black print:border-[1px] p-2 text-right font-black text-[10px]">
+                                <td key={'close_' + m.item_code} className={`border border-black print:border-[1px] p-2 text-right font-black text-[10px] ${closing < 0 ? 'text-red-600' : ''}`}>
                                   {closing === 0 ? '-' : closing}
                                 </td>
                               )
                             })}
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
-                            <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                             <td className="border border-black print:border-[1px] p-2 text-right font-black">-</td>
                           </tr>
                         </>

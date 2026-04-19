@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabaseClient';
 import { AlertCircle, ArrowLeft, CheckCircle2, Lock, FileText } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthProvider';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const { signIn } = useAuth();
+  const navigate = useNavigate();
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -15,16 +17,10 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      alert("Success: Successfully Logged In!");
+      await signIn(email, password);
+      
+      // 🎉 Direct Redirect to Dashboard
+      navigate('/');
       
     } catch (err: any) {
       setError(err.message || 'An error occurred during authentication.');
@@ -180,6 +176,16 @@ export default function LoginPage() {
                   )}
                 </button>
               </form>
+
+              {/* Registration Link */}
+              <div className="mt-8 pt-6 border-t border-gray-100 text-center relative z-10">
+                <p className="text-slate-500 font-medium text-sm">
+                  New Teacher / School?{' '}
+                  <Link to="/register" className="text-blue-600 hover:text-blue-700 font-bold hover:underline transition-colors">
+                    Register Here
+                  </Link>
+                </p>
+              </div>
 
             </div>
           </div>

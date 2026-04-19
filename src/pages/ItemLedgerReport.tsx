@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/apiClient';
 import Layout from '../components/Layout';
+import { useAuth } from '../contexts/AuthProvider';
 import { FileStack, Loader2, Save, Printer, RefreshCw } from 'lucide-react';
 import type { Database } from '../types/database.types';
 
@@ -38,13 +39,14 @@ interface ItemLedgerTotals {
 }
 
 export default function ItemLedgerReport() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const userId = user?.id || null;
   const [loading, setLoading] = useState(false);
   const [isGenerated, setIsGenerated] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
 
   const marathiMonths = ['जानेवारी', 'फेब्रुवारी', 'मार्च', 'एप्रिल', 'मे', 'जून', 'जुलै', 'ऑगस्ट', 'सप्टेंबर', 'ऑक्टोबर', 'नोव्हेंबर', 'डिसेंबर'];
-  const years = ['2023', '2024', '2025', '2026', '2027'];
+  const years = [2024, 2025, 2026, 2027, 2028];
 
   // Current Academic Year generally starts from April/June
   const currMonth = new Date().getMonth();
@@ -65,20 +67,17 @@ export default function ItemLedgerReport() {
   const [hasUpperPrimary, setHasUpperPrimary] = useState(true);
 
   const [reportMatrix, setReportMatrix] = useState<MatrixRow[]>([]);
-  const [reportMonths, setReportMonths] = useState<{ month: number, year: number, label: string }[]>([]);
+  const [reportMonths, setReportMonths] = useState<any[]>([]);
   const [totals, setTotals] = useState<ItemLedgerTotals | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchBaseData(session.user.id);
-      }
-    });
-  }, []);
+    if (userId) {
+      fetchBaseData(userId);
+    }
+  }, [userId]);
 
   const fetchBaseData = async (id: string) => {
-    const { data: profile } = await supabase
+    const { data: profile } = await api
       .from('profiles')
       .select('school_name_mr, center_name_mr, has_primary, has_upper_primary')
       .eq('id', id)
@@ -99,8 +98,28 @@ export default function ItemLedgerReport() {
       }
     }
 
-    const { data: menuMaster } = await supabase.from('menu_master').select('item_code, item_name').eq('teacher_id', id).order('created_at').returns<MenuItem[]>();
-    if (menuMaster) {
+    interface MenuItemFull {
+      item_code: string;
+      item_name: string;
+      item_category?: string;
+      sort_rank?: number;
+    }
+
+    const { data: menuMasterRaw } = await api.from('menu_master').select('item_code, item_name, item_category, sort_rank').eq('teacher_id', id);
+    if (menuMasterRaw) {
+      const menuMaster = ((menuMasterRaw || []) as MenuItemFull[]).sort((a, b) => {
+        // Priority 1: Category (MAIN before INGREDIENT)
+        if (a.item_category === 'MAIN' && b.item_category !== 'MAIN') return -1;
+        if (a.item_category !== 'MAIN' && b.item_category === 'MAIN') return 1;
+        
+        // Priority 2: Sort Rank (Ascending)
+        const rankA = a.sort_rank ?? 999;
+        const rankB = b.sort_rank ?? 999;
+        if (rankA !== rankB) return rankA - rankB;
+        
+        // Fallback: Name
+        return (a.item_name || '').localeCompare(b.item_name || '');
+      });
       setMenuItems(menuMaster as MenuItem[]);
       if (menuMaster.length > 0 && !selectedItemName) setSelectedItemName(menuMaster[0].item_name);
     }
@@ -109,7 +128,7 @@ export default function ItemLedgerReport() {
   const handleGenerate = async (force = false) => {
     if (!userId || !selectedItemName) return;
     setLoading(true);
-    
+
     // Immediate state sanitation to prevent ghost data flicker
     setReportMatrix([]);
     setTotals(null);
@@ -117,19 +136,23 @@ export default function ItemLedgerReport() {
     setIsSaved(false);
 
     try {
-      // Range signature: YYYY-MM_to_YYYY-MM
-      const dateRangeId = `${startYear}-${String(startMonth).padStart(2, '0')}_to_${endYear}-${String(endMonth).padStart(2, '0')}`;
+      const currentItem = menuItems.find(m => m.item_name === selectedItemName);
+      const rangeId = `${startYear}-${String(startMonth).padStart(2, '0')}_to_${endYear}-${String(endMonth).padStart(2, '0')}`;
 
-      const { data: snapshot } = await supabase
+      let snapshotQuery = api
         .from('item_ledger_reports')
         .select('*')
         .eq('teacher_id', userId)
-        .eq('item_name', selectedItemName)
-        .eq('date_range', dateRangeId)
-        .eq('date_range', dateRangeId)
-        .eq('standard_group', selectedScope)
-        .returns<ItemLedgerSnapshot[]>()
-        .maybeSingle();
+        .eq('date_range', rangeId)
+        .eq('standard_group', selectedScope);
+
+      if (currentItem?.item_code) {
+        snapshotQuery = snapshotQuery.or(`item_code.eq."${currentItem.item_code}",item_name.eq."${selectedItemName}"`);
+      } else {
+        snapshotQuery = snapshotQuery.eq('item_name', selectedItemName);
+      }
+
+      const { data: snapshot } = await snapshotQuery.returns<ItemLedgerSnapshot[]>().maybeSingle();
 
       if (snapshot && snapshot.report_data && !force) {
         setIsGenerated(true);
@@ -142,13 +165,15 @@ export default function ItemLedgerReport() {
         return;
       }
 
-      // 2. Generate date sequences
+      // 2. Generate date sequences - ALLOW FUTURE MONTHS
       const seq = [];
       const cDate = new Date(startYear, startMonth - 1, 1);
       const eDate = new Date(endYear, endMonth - 1, 1);
 
+
+
       let safeLoop = 0;
-      while (cDate <= eDate && safeLoop < 36) { // limit 3 years max
+      while (cDate <= eDate && safeLoop < 36) {
         seq.push({ month: cDate.getMonth() + 1, year: cDate.getFullYear() });
         cDate.setMonth(cDate.getMonth() + 1);
         safeLoop++;
@@ -162,7 +187,7 @@ export default function ItemLedgerReport() {
       setReportMonths(generatedMonths);
 
       // 3. Fetch monthly_reports in one go
-      const { data: reports } = await supabase
+      const { data: reports } = await api
         .from('monthly_reports')
         .select('report_month, report_year, report_data')
         .eq('teacher_id', userId)
@@ -173,47 +198,111 @@ export default function ItemLedgerReport() {
         reportsMap.set(`${r.report_year}-${r.report_month}`, r);
       });
 
-      // 4. Fetch Raw Receipts for the entire range (to ensure live deletion sync)
-      const { data: rawReceipts } = await supabase
+      // 4. Fetch Raw Receipts for the entire range
+      const endMonthForQuery = endMonth === 12 ? 1 : endMonth + 1;
+      const endYearForQuery = endMonth === 12 ? endYear + 1 : endYear;
+
+      let receiptsQuery = api
         .from('stock_receipts')
-        .select('receipt_date, quantity')
+        .select('receipt_date, quantity_kg, bill_no')
         .eq('teacher_id', userId)
-        .eq('item_name', selectedItemName)
         .eq('standard_group', selectedScope)
         .gte('receipt_date', `${startYear}-${String(startMonth).padStart(2, '0')}-01`)
-        .lt('receipt_date', `${endYear}-${String(endMonth === 12 ? 1 : endMonth + 1).padStart(2, '0')}-01`);
+        .lt('receipt_date', `${endYearForQuery}-${String(endMonthForQuery).padStart(2, '0')}-01`);
+
+      if (currentItem?.item_code) {
+        receiptsQuery = receiptsQuery.or(`item_code.eq."${currentItem.item_code}",item_name.eq."${selectedItemName}"`);
+      } else {
+        receiptsQuery = receiptsQuery.eq('item_name', selectedItemName);
+      }
+
+      const { data: rawReceipts } = await receiptsQuery;
 
       const receiptsByMonth = new Map();
       (rawReceipts || []).forEach((r: any) => {
-          const d = new Date(r.receipt_date);
-          const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
-          receiptsByMonth.set(key, (receiptsByMonth.get(key) || 0) + Number(r.quantity));
+        // EXCLUDE Opening Balance declarations from the 'Received' column
+        if (r.bill_no === 'OPENING_BALANCE') return;
+
+        const parts = r.receipt_date.split('-');
+        const y = parts[0];
+        const m = parseInt(parts[1], 10);
+        const key = `${y}-${m}`;
+        receiptsByMonth.set(key, (receiptsByMonth.get(key) || 0) + Number(r.quantity_kg));
       });
 
-      // Determine initial opening balance mathematically
-      let currentOpening = 0;
-
-      // FALLBACK: Fetch from inventory_stock as a starting baseline if no reports exist
-      const { data: stockEntry } = await supabase
-        .from('inventory_stock')
-        .select('*')
+      // 4b. Fetch Consumption Logs for the entire range
+      const { data: allConsLogs } = await api
+        .from('consumption_logs')
+        .select('log_date, main_foods_all, ingredients_used, meals_served_primary, meals_served_upper_primary, borrowed_items')
         .eq('teacher_id', userId)
-        .eq('item_name', selectedItemName)
         .eq('standard_group', selectedScope)
-        .returns<Database['public']['Tables']['inventory_stock']['Row'][]>()
-        .maybeSingle();
-      
-      const baselineBalance = stockEntry ? Number(stockEntry.current_balance) : 0;
+        .gte('log_date', `${startYear}-${String(startMonth).padStart(2, '0')}-01`)
+        .lt('log_date', `${endYearForQuery}-${String(endMonthForQuery).padStart(2, '0')}-01`);
 
-      // Calculate Chained Matrix
+      // Get grams for live calculation
+      const { data: itemFullInfo } = await api.from('menu_master').select('*').eq('teacher_id', userId).eq('item_name', selectedItemName).single();
+      const grams = itemFullInfo ? (selectedScope === 'primary' ? Number(itemFullInfo.grams_primary || 0) : Number(itemFullInfo.grams_upper_primary || 0)) : 0;
+
+      const consumedByMonth = new Map();
+      const borrowedByMonth = new Map();
+
+      (allConsLogs || []).forEach((c: any) => {
+        const parts = c.log_date.split('-');
+        const y = parts[0];
+        const m = parseInt(parts[1], 10);
+        const key = `${y}-${m}`;
+
+        const isUsed = (c.main_foods_all || []).includes(selectedItemName) || (c.ingredients_used || []).includes(selectedItemName);
+        if (isUsed) {
+          const att = selectedScope === 'primary' ? (Number(c.meals_served_primary) || 0) : (Number(c.meals_served_upper_primary) || 0);
+          const cAmt = (att * grams) / 1000;
+          consumedByMonth.set(key, (consumedByMonth.get(key) || 0) + cAmt);
+        }
+
+        const borrowed = Number(c.borrowed_items?.[selectedItemName] || 0);
+        if (borrowed > 0) {
+          borrowedByMonth.set(key, (borrowedByMonth.get(key) || 0) + borrowed);
+        }
+      });
+
+      // 5. Calculate Chained Matrix
       const matrix: any[] = [];
       let grandReceived = 0;
       let grandBorrowed = 0;
       let grandConsumed = 0;
 
+      let currentOpening = 0;
+
+      // 4c. Reconstruct historical baseline (Balance before start date)
+      const { data: preReceipts } = await api
+        .from('stock_receipts')
+        .select('quantity_kg')
+        .eq('teacher_id', userId)
+        .eq('standard_group', selectedScope)
+        .lt('receipt_date', `${startYear}-${String(startMonth).padStart(2, '0')}-01`)
+        .or(currentItem?.item_code ? `item_code.eq."${currentItem.item_code}",item_name.eq."${selectedItemName}"` : `item_name.eq."${selectedItemName}"`);
+
+      const { data: preConsLogs } = await api
+        .from('consumption_logs')
+        .select('meals_served_primary, meals_served_upper_primary, main_foods_all, ingredients_used')
+        .eq('teacher_id', userId)
+        .eq('standard_group', selectedScope)
+        .lt('log_date', `${startYear}-${String(startMonth).padStart(2, '0')}-01`);
+
+      let initialBaseline = 0;
+      (preReceipts || []).forEach(r => initialBaseline += Number(r.quantity_kg));
+      (preConsLogs || []).forEach(c => {
+        const isUsed = (c.main_foods_all || []).includes(selectedItemName) || (c.ingredients_used || []).includes(selectedItemName);
+        if (isUsed) {
+          const att = selectedScope === 'primary' ? (Number(c.meals_served_primary) || 0) : (Number(c.meals_served_upper_primary) || 0);
+          initialBaseline -= (att * grams) / 1000;
+        }
+      });
+
       for (let i = 0; i < generatedMonths.length; i++) {
         const dm = generatedMonths[i];
         const key = `${dm.year}-${dm.month}`;
+
         let mFoundOpening = 0;
         let mConsumed = 0;
         let mBorrowed = 0;
@@ -221,7 +310,6 @@ export default function ItemLedgerReport() {
         if (reportsMap.has(key)) {
           const rawData = reportsMap.get(key).report_data;
           const repData = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
-
           const itemMatch = repData?.find((x: any) => x.item === selectedItemName);
           if (itemMatch) {
             mFoundOpening = Number(itemMatch.openingBalance) || 0;
@@ -230,55 +318,76 @@ export default function ItemLedgerReport() {
           }
         }
 
-        if (i === 0) {
-          // Priority: 1. Official Report Opening Balance, 2. Current Inventory Baseline
-          currentOpening = mFoundOpening || baselineBalance;
+        // 5a. Determine Opening for this Month
+        // If there's an explicit OPENING_BALANCE receipt FOR THIS MONTH, it overrides everything.
+        const monthExplicitOpening = (rawReceipts || []).find(r =>
+          r.bill_no === 'OPENING_BALANCE' &&
+          r.receipt_date.startsWith(`${dm.year}-${String(dm.month).padStart(2, '0')}`)
+        );
+
+        if (monthExplicitOpening) {
+          currentOpening = Number(monthExplicitOpening.quantity_kg);
+        } else if (i === 0) {
+          // If first month in sequence and no explicit opening, use the historical baseline
+          currentOpening = mFoundOpening || initialBaseline;
         }
 
-        const liveReceived = receiptsByMonth.get(key) || 0;
-        const received = liveReceived;
-        const borrowed = mBorrowed;
-        const total = currentOpening + received + borrowed;
+        // Note: For all other months (i > 0), if no explicit opening exists, 
+        // we use the 'currentOpening' which is the previous month's closing (set at end of loop).
 
+        // Fallback to aggregated logs if no snapshot exists
+        if (mConsumed === 0 && consumedByMonth.has(key)) {
+          mConsumed = consumedByMonth.get(key);
+        }
+        if (mBorrowed === 0 && borrowedByMonth.has(key)) {
+          mBorrowed = borrowedByMonth.get(key);
+        }
+
+        const received = receiptsByMonth.get(key) || 0;
         const consumed = mConsumed;
-        const returned = 0; // Return/Repayment is currently implicit in balance
-        const totalExpense = consumed + returned;
 
+        // Borrowing logic: Only borrow if consumption exceeds physical availability
+        // (Opening Balance if positive + Received this month)
+        const physicalAvailable = Math.max(0, currentOpening) + received;
+        const borrowed = Math.max(0, consumed - physicalAvailable);
+        const total = currentOpening + received;
+        const totalExpense = consumed;
         const closing = total - totalExpense;
 
+        // Both historical and current (live) months
         matrix.push({
           monthId: key,
-          opening: currentOpening.toFixed(2),
-          received: received.toFixed(2),
-          borrowed: borrowed.toFixed(2),
-          total: total.toFixed(2),
-          consumed: consumed.toFixed(2),
-          returned: returned.toFixed(2),
-          totalExpense: totalExpense.toFixed(2),
-          closing: closing.toFixed(2)
+          opening: currentOpening.toFixed(3),
+          received: received.toFixed(3),
+          borrowed: borrowed.toFixed(3),
+          total: total.toFixed(3),
+          consumed: consumed.toFixed(3),
+          returned: '0.000',
+          totalExpense: totalExpense.toFixed(3),
+          closing: closing.toFixed(3)
         } as MatrixRow);
+
+        currentOpening = closing;
 
         grandReceived += received;
         grandBorrowed += borrowed;
         grandConsumed += consumed;
-
-        currentOpening = closing;
       }
 
-      const gtOpening = matrix.length > 0 ? Number(matrix[0].opening) : 0;
-      const gtTotal = gtOpening + grandReceived + grandBorrowed;
+      const gtOpening = matrix.length > 0 && matrix[0].opening !== '-' ? Number(matrix[0].opening) : 0;
+      const gtTotal = gtOpening + grandReceived;
       const gtExpense = grandConsumed;
       const gtClosing = gtTotal - gtExpense;
 
       const finalTotals = {
-        opening: gtOpening.toFixed(2),
-        received: grandReceived.toFixed(2),
-        borrowed: grandBorrowed.toFixed(2),
-        total: gtTotal.toFixed(2),
-        consumed: grandConsumed.toFixed(2),
-        returned: '0.00',
-        totalExpense: gtExpense.toFixed(2),
-        closing: gtClosing.toFixed(2)
+        opening: gtOpening.toFixed(3),
+        received: grandReceived.toFixed(3),
+        borrowed: grandBorrowed.toFixed(3),
+        total: gtTotal.toFixed(3),
+        consumed: grandConsumed.toFixed(3),
+        returned: '0.000',
+        totalExpense: gtExpense.toFixed(3),
+        closing: gtClosing.toFixed(3)
       };
 
       setReportMatrix(matrix);
@@ -312,7 +421,7 @@ export default function ItemLedgerReport() {
         }
       };
 
-      const { data: existing } = await supabase
+      const { data: existing } = await api
         .from('item_ledger_reports')
         .select('id')
         .eq('teacher_id', userId)
@@ -324,14 +433,14 @@ export default function ItemLedgerReport() {
 
       let err;
       if (existing) {
-        const res = await (supabase
+        const res = await (api
           .from('item_ledger_reports') as any)
           .update(payload)
           .eq('id', existing.id)
           .eq('teacher_id', userId);
         err = res.error;
       } else {
-        const res = await (supabase.from('item_ledger_reports') as any).insert([payload]);
+        const res = await (api.from('item_ledger_reports') as any).insert([payload]);
         err = res.error;
       }
 
@@ -350,13 +459,20 @@ export default function ItemLedgerReport() {
     return (
       <tr className={`border-b border-black print:border-[1px] hover:bg-slate-50 print:hover:bg-transparent ${highlight ? 'font-black bg-gray-100/50 print:bg-transparent' : 'font-bold'}`}>
         <td className="border-r border-black print:border-[1px] px-2 py-2.5 text-left w-48 sticky left-0 bg-white print:static uppercase tracking-tighter shadow-[1px_0_0_black] print:shadow-none whitespace-nowrap">{label}</td>
-        {reportMatrix.map(col => (
-          <td key={col.monthId + rowKey} className={`border-r border-black print:border-[1px] px-1.5 py-2.5 text-center w-px whitespace-nowrap ${col[rowKey] === '0.00' ? 'text-gray-400 print:text-black' : 'text-slate-800'}`}>
-            {col[rowKey] === '0.00' ? '-' : col[rowKey]}
-          </td>
-        ))}
-        <td className="px-1.5 py-2.5 text-center w-px whitespace-nowrap font-black bg-gray-50/50 print:bg-transparent text-[#474379] print:text-black shadow-inner border-l-2 border-black">
-          {totals && totals[rowKey as keyof ItemLedgerTotals] === '0.00' ? '-' : totals ? totals[rowKey as keyof ItemLedgerTotals] : '-'}
+        {reportMatrix.map(col => {
+          const rawVal = col[rowKey];
+          if (rawVal === '-') {
+            return <td key={col.monthId + rowKey} className="border-r border-black print:border-[1px] px-1.5 py-2.5 text-center w-px text-gray-300">-</td>;
+          }
+          const val = Number(rawVal || 0);
+          return (
+            <td key={col.monthId + rowKey} className={`border-r border-black print:border-[1px] px-1.5 py-2.5 text-center w-px whitespace-nowrap ${val === 0 ? 'text-gray-400 print:text-black' : val < 0 ? 'text-red-600' : 'text-slate-800'}`}>
+              {val.toFixed(3)}
+            </td>
+          );
+        })}
+        <td className={`px-1.5 py-2.5 text-center w-px whitespace-nowrap font-black bg-gray-50/50 print:bg-transparent shadow-inner border-l-2 border-black ${totals && Number(totals[rowKey as keyof ItemLedgerTotals]) < 0 ? 'text-red-600' : 'text-[#474379] print:text-black'}`}>
+          {totals && totals[rowKey as keyof ItemLedgerTotals] === '0.000' ? '-' : totals ? totals[rowKey as keyof ItemLedgerTotals] : '-'}
         </td>
       </tr>
     )
@@ -376,14 +492,14 @@ export default function ItemLedgerReport() {
         {/* Optimized Inline Control Bar */}
         <div className="mb-6 mx-auto w-full lg:max-w-[1400px] print:hidden">
           <div className="bg-white/90 backdrop-blur-md p-4 rounded-[2rem] shadow-sm border border-slate-100 flex flex-wrap items-end gap-4">
-            
+
             {/* Item Selection */}
             <div className="flex-1 min-w-[200px] space-y-1.5">
               <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Inventory Item</label>
               <div className="bg-slate-50 p-1 rounded-xl border border-slate-100 flex items-center gap-2">
                 <FileStack size={14} className="ml-2 text-blue-500" />
-                <select 
-                  value={selectedItemName} 
+                <select
+                  value={selectedItemName}
                   onChange={e => { setSelectedItemName(e.target.value); resetFlow(); }}
                   className="bg-transparent flex-1 py-1.5 font-bold text-xs text-slate-700 outline-none"
                   title="वस्तू निवडा (Select inventory item)"
@@ -398,13 +514,13 @@ export default function ItemLedgerReport() {
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Standard</label>
                 <div className="bg-slate-50 p-1 rounded-xl border border-slate-200 flex items-center h-10 shadow-inner w-44">
-                  <button 
+                  <button
                     onClick={() => { setSelectedScope('primary'); resetFlow(); }}
                     className={`flex-1 h-full text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${selectedScope === 'primary' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-slate-400 hover:text-slate-600'}`}
                   >
                     I-V
                   </button>
-                  <button 
+                  <button
                     onClick={() => { setSelectedScope('upper_primary'); resetFlow(); }}
                     className={`flex-1 h-full text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${selectedScope === 'upper_primary' ? 'bg-white text-purple-600 shadow-sm border border-purple-100' : 'text-slate-400 hover:text-slate-600'}`}
                   >
@@ -414,22 +530,30 @@ export default function ItemLedgerReport() {
               </div>
             )}
 
-            {/* From Period */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">From Period</label>
               <div className="bg-slate-50 p-1 rounded-xl border border-slate-100 flex items-center gap-1">
-                <select 
-                  value={startMonth} 
-                  onChange={e => { setStartMonth(Number(e.target.value)); resetFlow(); }} 
+                <select
+                  value={startMonth}
+                  onChange={e => {
+                    const m = Number(e.target.value);
+                    setStartMonth(m);
+                    resetFlow();
+                  }}
                   className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
                   title="सुरूवातीचा महिना (Start month)"
                 >
                   {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
                 </select>
                 <div className="w-px h-4 bg-slate-200" />
-                <select 
-                  value={startYear} 
-                  onChange={e => { setStartYear(Number(e.target.value)); resetFlow(); }} 
+                <select
+                  value={startYear}
+                  onChange={e => {
+                    const y = Number(e.target.value);
+                    setStartYear(y);
+                    setEndYear(y); // Force same year
+                    resetFlow();
+                  }}
                   className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
                   title="सुरूवातीचे वर्ष (Start year)"
                 >
@@ -438,26 +562,40 @@ export default function ItemLedgerReport() {
               </div>
             </div>
 
-            {/* To Period */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">To Period</label>
               <div className="bg-slate-50 p-1 rounded-xl border border-slate-100 flex items-center gap-1">
-                <select 
-                  value={endMonth} 
-                  onChange={e => { setEndMonth(Number(e.target.value)); resetFlow(); }} 
+                <select
+                  value={endMonth}
+                  onChange={e => {
+                    setEndMonth(Number(e.target.value));
+                    resetFlow();
+                  }}
                   className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
                   title="अखेरचा महिना (End month)"
                 >
-                  {marathiMonths.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                  {marathiMonths.map((m, i) => {
+                    const mVal = i + 1;
+                    const diff = (endYear * 12 + mVal) - (startYear * 12 + startMonth);
+                    const isInvalid = diff < 0 || diff > 11;
+                    return (
+                      <option key={mVal} value={mVal} disabled={isInvalid}>{m}</option>
+                    );
+                  })}
                 </select>
                 <div className="w-px h-4 bg-slate-200" />
-                <select 
-                  value={endYear} 
-                  onChange={e => { setEndYear(Number(e.target.value)); resetFlow(); }} 
+                <select
+                  value={endYear}
+                  onChange={e => {
+                    setEndYear(Number(e.target.value));
+                    resetFlow();
+                  }}
                   className="bg-transparent px-2 py-1.5 font-bold text-xs text-slate-700 outline-none"
                   title="अखेरचे वर्ष (End year)"
                 >
-                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                  {years.map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -469,7 +607,7 @@ export default function ItemLedgerReport() {
                 disabled={loading}
                 className={`h-10 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 active:scale-95 shadow-sm border ${isGenerated ? 'bg-white border-slate-200 text-slate-600' : 'bg-slate-900 border-slate-900 text-white'}`}
               >
-                {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />} 
+                {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
                 {isGenerated ? 'RE-GENERATE (RE-SYNC LIVE)' : 'GENERATE DATA'}
               </button>
 
@@ -497,7 +635,7 @@ export default function ItemLedgerReport() {
 
         {/* Printable Area */}
         <div className="print:bg-white print:p-0 print:m-0 w-full font-['Inter'] relative pt-2">
-          
+
           {/* Forcing A4 Landscape and 10mm Margins */}
           <style dangerouslySetInnerHTML={{
             __html: `
@@ -510,7 +648,7 @@ export default function ItemLedgerReport() {
 
           {reportMatrix.length > 0 ? (
             <div className="w-full overflow-x-auto print:overflow-visible pb-10 custom-scrollbar">
-              
+
               {/* Report Card - Stripping all digital styling for Print */}
               <div className="print:shadow-none print:bg-transparent print:p-0 print:m-0 print:border-none print:rounded-none print:max-w-none print:w-full print:min-w-0 md:border-2 border-slate-200 md:shadow-2xl md:rounded-[40px] p-4 md:p-12 w-full min-w-[1000px] relative bg-white transition-all mx-auto">
 
@@ -566,7 +704,7 @@ export default function ItemLedgerReport() {
                       {renderMetricRow('२) प्राप्त (Received)', 'received')}
                       {renderMetricRow('३) उसने घेतले (Borrowed)', 'borrowed')}
 
-                      {renderMetricRow('४) एकूण (Total 1+2+3)', 'total', true)}
+                      {renderMetricRow('४) एकूण (Total 1+2)', 'total', true)}
 
                       {/* Visual gap spacer row for grouping (CSS only approach or thin row) */}
                       <tr><td colSpan={reportMonths.length + 2} className="h-[2px] bg-black print:bg-black p-0 border-y-0"></td></tr>
@@ -582,13 +720,20 @@ export default function ItemLedgerReport() {
                       {/* Closing Balance Hero Row */}
                       <tr className="border-b border-black font-black text-sm print:text-xs">
                         <td className="border-r border-black px-2 py-2.5 text-left sticky left-0 bg-yellow-50 print:static print:bg-transparent uppercase shadow-[1px_0_0_black] print:shadow-none whitespace-nowrap">८) अखेर शिल्लक (Closing 4-7)</td>
-                        {reportMatrix.map(col => (
-                          <td key={'closing_' + col.monthId} className="border-r border-black print:border-[1px] px-1.5 py-2.5 text-center bg-yellow-50/30 print:bg-transparent text-black w-px whitespace-nowrap">
-                            {col.closing === '0.00' ? '-' : col.closing}
-                          </td>
-                        ))}
-                        <td className="px-1.5 py-2.5 text-center font-black bg-yellow-100 print:bg-transparent border-l-2 border-black tracking-widest decoration-dotted underline underline-offset-4 w-px whitespace-nowrap">
-                          {totals?.closing === '0.00' ? '-' : totals?.closing}
+                        {reportMatrix.map(col => {
+                          const rawVal = col.closing;
+                          if (rawVal === '-') {
+                            return <td key={'closing_' + col.monthId} className="border-r border-black print:border-[1px] px-1.5 py-2.5 text-center bg-yellow-50/30 print:bg-transparent w-px text-gray-300">-</td>;
+                          }
+                          const val = Number(rawVal || 0);
+                          return (
+                            <td key={'closing_' + col.monthId} className={`border-r border-black print:border-[1px] px-1.5 py-2.5 text-center bg-yellow-50/30 print:bg-transparent w-px whitespace-nowrap ${val < 0 ? 'text-red-600' : 'text-black'}`}>
+                              {val.toFixed(3)}
+                            </td>
+                          );
+                        })}
+                        <td className={`px-1.5 py-2.5 text-center font-black bg-yellow-100 print:bg-transparent border-l-2 border-black tracking-widest decoration-dotted underline underline-offset-4 w-px whitespace-nowrap ${Number(totals?.closing || 0) < 0 ? 'text-red-600' : ''}`}>
+                          {Number(totals?.closing || 0) === 0 ? '-' : Number(totals?.closing).toFixed(3)}
                         </td>
                       </tr>
                     </tbody>

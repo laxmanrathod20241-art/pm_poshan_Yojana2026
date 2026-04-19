@@ -1,0 +1,36 @@
+--- INVENTORY STOCK ---
+Item: जिरे, Balance: -0.1088000000000000080, Group: primary
+Item: हरभरा, Balance: 499.32, Group: primary
+Item: मीठ, Balance: 499.456, Group: primary
+Item: मुगडाळ, Balance: -2.72, Group: primary
+Item: चवळी, Balance: -1.36, Group: primary
+Item: सोयाबीन, Balance: -0.68, Group: primary
+Item: मुग, Balance: -1.36, Group: primary
+Item: तूरडाळ, Balance: -1.36, Group: primary
+Item: हळद, Balance: -0.1088000000000000080, Group: primary
+Item: मोहरी, Balance: -0.1088000000000000080, Group: primary
+Item: तेल, Balance: -2.25760000000000048, Group: primary
+Item: मटकी, Balance: -0.68, Group: primary
+Item: तांदूळ, Balance: -155.08600000000002, Group: primary
+Item: कांदामसाला, Balance: -0.6800, Group: primary
+Item: वाटाणा, Balance: -3.40, Group: primary
+
+--- STOCK RECEIPTS ---
+Item: मटकी, Qty: -0.88, Date: 2026-04-18, Group: primary
+Item: सोयाबीन, Qty: 2.54, Date: 2026-04-18, Group: primary
+Item: मीठ, Qty: -0.712, Date: 2026-04-18, Group: primary
+Item: जिरे, Qty: -0.12, Date: 2026-04-18, Group: primary
+Item: मोहरी, Qty: 1.44, Date: 2026-04-18, Group: primary
+Item: हळद, Qty: 2.686, Date: 2026-04-18, Group: primary
+Item: तेल, Qty: -4.543, Date: 2026-04-18, Group: primary
+Item: कांदामसाला, Qty: 1.372, Date: 2026-04-18, Group: primary
+Item: तांदूळ, Qty: -114.2, Date: 2026-04-18, Group: primary
+Item: मुगडाळ, Qty: 0.84, Date: 2026-04-18, Group: primary
+Item: तांदूळ, Qty: 500, Date: 2026-04-19, Group: primary
+Item: तूरडाळ, Qty: -2.601, Date: 2026-04-18, Group: primary
+Item: मसूरडाळ, Qty: 0.6, Date: 2026-04-18, Group: primary
+Item: मुग, Qty: -1.4, Date: 2026-04-18, Group: primary
+Item: चवळी, Qty: -1.16, Date: 2026-04-18, Group: primary
+Item: तांदूळ, Qty: 500, Date: 2026-04-19, Group: primary
+Item: हरभरा, Qty: 13.172, Date: 2026-04-18, Group: primary
+Item: वाटाणा, Qty: 2.28, Date: 2026-04-18, Group: primary

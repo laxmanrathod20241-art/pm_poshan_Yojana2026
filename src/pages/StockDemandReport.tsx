@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/apiClient';
 import Layout from '../components/Layout';
+import { useAuth } from '../contexts/AuthProvider';
 import { reconstructOpeningBalances } from '../utils/inventoryUtils';
 import { Loader2, BarChart2, Printer, AlertCircle } from 'lucide-react';
 import type { Database } from '../types/database.types';
@@ -8,6 +9,21 @@ import type { Database } from '../types/database.types';
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type MenuItem = Database['public']['Tables']['menu_master']['Row'];
 type Enrollment = Database['public']['Tables']['student_enrollment']['Row'];
+type ScheduleRow = Database['public']['Tables']['menu_weekly_schedule']['Row'];
+
+// Helper to count weekday occurrences in a date range
+const getWeekdayCounts = (start: Date, end: Date) => {
+  const counts: Record<string, number> = {
+    'Monday': 0, 'Tuesday': 0, 'Wednesday': 0, 'Thursday': 0, 'Friday': 0, 'Saturday': 0, 'Sunday': 0
+  };
+  const currentDate = new Date(start);
+  while (currentDate <= end) {
+    const dayName = currentDate.toLocaleDateString('en-US', { weekday: 'long' });
+    counts[dayName]++;
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  return counts;
+};
 
 export default function StockDemandReport() {
 
@@ -37,44 +53,83 @@ export default function StockDemandReport() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [inventoryBalances, setInventoryBalances] = useState<Record<string, number>>({});
 
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const userId = user?.id || null;
+  const [schedule, setSchedule] = useState<ScheduleRow[]>([]);
+  const [weekdayCounts, setWeekdayCounts] = useState<Record<string, number>>({});
+  const [itemFrequencies, setItemFrequencies] = useState<Record<string, number>>({});
+  
   const [customDemands, setCustomDemands] = useState<Record<string, string>>({});
   const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
-    const fetchSessionAndData = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchReportData(session.user.id);
-      }
-    };
-    fetchSessionAndData();
-  }, [classGroup, fromMonth, fromYear]); // Refetch/recalc when parameters change
+    if (userId) {
+      fetchReportData(userId);
+    }
+  }, [userId, classGroup, fromMonth, fromYear, tillMonth, tillYear]);
 
-  // Auto-Calculation Engine with Rounding
+  // Auto-Calculation Engine with Rounding & Frequency Logic
   useEffect(() => {
     if (menuItems.length > 0) {
       const newDemands: Record<string, string> = {};
+      const newFrequencies: Record<string, number> = {};
+
       menuItems.forEach(item => {
+        // 1. Calculate Frequency for this item
+        let frequency = 0;
+        const lowerName = item.item_name.toLowerCase();
+        const isStaple = lowerName.includes('तांदूळ') || lowerName.includes('rice') || 
+                         lowerName.includes('तेल') || lowerName.includes('oil') || 
+                         lowerName.includes('मीठ') || lowerName.includes('salt');
+
+        if (isStaple) {
+          frequency = workingDays;
+        } else {
+          // Check schedule for this item code or name
+          schedule.filter(s => s.is_active).forEach(s => {
+            const hasItem = (s.menu_items || []).includes(item.item_code) || 
+                            (s.menu_items || []).includes(item.item_name) ||
+                            (s.main_food_codes || []).includes(item.item_name) ||
+                            (s.main_food_codes || []).includes(item.item_code);
+            
+            if (hasItem) {
+              frequency += (weekdayCounts[s.day_name] || 0);
+            }
+          });
+        }
+
+        newFrequencies[item.id] = frequency;
+
+        // 2. Calculate Demand
         const balance = inventoryBalances[item.item_name] || 0;
         const grams = classGroup === 'PRIMARY' ? Number(item.grams_primary) : Number(item.grams_upper_primary);
-        const required = (enrollmentCount * workingDays * grams) / 1000;
+        const required = (enrollmentCount * frequency * grams) / 1000;
         const demand = Math.max(0, required - balance);
-        newDemands[item.id] = Math.ceil(demand).toString();
+        newDemands[item.id] = demand.toFixed(3);
       });
+
+      setItemFrequencies(newFrequencies);
       setCustomDemands(newDemands);
       setIsSaved(false);
     }
-  }, [menuItems, inventoryBalances, enrollmentCount, workingDays, classGroup]);
+  }, [menuItems, inventoryBalances, enrollmentCount, workingDays, classGroup, schedule, weekdayCounts]);
 
   const fetchReportData = async (id: string) => {
     setLoading(true);
     try {
+      // 0. Calculate Weekday Occurrences for the period
       const fromMonthIndex = marathiMonths.indexOf(fromMonth);
+      const tillMonthIndex = marathiMonths.indexOf(tillMonth);
+      
+      const startDate = new Date(Number(fromYear), fromMonthIndex, 1);
+      const endDate = new Date(Number(tillYear), tillMonthIndex + 1, 0); // Last day of tillMonth
+      
+      const counts = getWeekdayCounts(startDate, endDate);
+      setWeekdayCounts(counts);
+
       const cutoffDate = `${fromYear}-${String(fromMonthIndex + 1).padStart(2, '0')}-01`;
 
-      const { data: profile } = await supabase
+      const { data: profile } = await api
         .from('profiles')
         .select('school_name_mr, center_name_mr, has_primary, has_upper_primary')
         .eq('id', id)
@@ -95,7 +150,7 @@ export default function StockDemandReport() {
         if (hp && !hup) setClassGroup('PRIMARY');
       }
 
-      const { data: enrollment } = await supabase
+      const { data: enrollment } = await api
         .from('student_enrollment')
         .select('*')
         .eq('teacher_id', id)
@@ -111,13 +166,31 @@ export default function StockDemandReport() {
         setEnrollmentCount(0);
       }
 
-      const { data: menu } = await supabase
+      const { data: menuRaw } = await api
         .from('menu_master')
         .select('*')
         .eq('teacher_id', id);
 
-      const items = menu || [];
+      const { data: scheduleData } = await (api as any)
+        .from('menu_weekly_schedule')
+        .select('*')
+        .eq('teacher_id', id);
+
+      const items = ((menuRaw || []) as any[]).sort((a, b) => {
+        // Priority 1: Category (MAIN before INGREDIENT)
+        if (a.item_category === 'MAIN' && b.item_category !== 'MAIN') return -1;
+        if (a.item_category !== 'MAIN' && b.item_category === 'MAIN') return 1;
+        
+        // Priority 2: Sort Rank (Ascending)
+        const rankA = a.sort_rank ?? 999;
+        const rankB = b.sort_rank ?? 999;
+        if (rankA !== rankB) return rankA - rankB;
+        
+        // Fallback: Name
+        return (a.item_name || '').localeCompare(b.item_name || '');
+      });
       setMenuItems(items);
+      setSchedule(scheduleData || []);
 
       // Reconstruct historical balances using centralized utility with SCOPE
       const reconcilation = await reconstructOpeningBalances(id, cutoffDate, items, classGroup.toLowerCase() as any);
@@ -138,7 +211,7 @@ export default function StockDemandReport() {
     if (!userId) return;
     setLoading(true);
     try {
-      const { error } = await (supabase as any)
+      const { error } = await (api as any)
         .from('demand_reports')
         .insert([{
           teacher_id: userId,
@@ -349,22 +422,25 @@ export default function StockDemandReport() {
               <thead>
                 <tr className="bg-slate-50 print:bg-gray-100">
                   <th className="border border-black print:border-black print:text-black w-12 p-2 py-3 print:py-1 text-center">अ. क्र.</th>
-                  <th className="border border-black print:border-black print:text-black w-[35%] p-2 py-3 print:py-1 text-left">धान्यादी माल</th>
-                  <th className="border border-black print:border-black print:text-black w-[18%] p-2 py-3 print:py-1 text-right">मागील माह अखेर शिल्लक</th>
-                  <th className="border border-black print:border-black print:text-black w-[18%] p-2 py-3 print:py-1 text-right">पटानुसार आवश्यक माल</th>
-                  <th className="border border-black print:border-black print:text-black w-[17%] p-2 py-3 print:py-1 text-right text-lg print:text-base">निव्वळ मागणी</th>
+                  <th className="border border-black print:border-black print:text-black w-[30%] p-2 py-3 print:py-1 text-left">धान्यादी माल</th>
+                  <th className="border border-black print:border-black print:text-black w-[15%] p-2 py-3 print:py-1 text-center">वापराचे एकूण दिवस</th>
+                  <th className="border border-black print:border-black print:text-black w-[15%] p-2 py-3 print:py-1 text-right">मागील माह अखेर शिल्लक</th>
+                  <th className="border border-black print:border-black print:text-black w-[15%] p-2 py-3 print:py-1 text-right">पटानुसार आवश्यक माल</th>
+                  <th className="border border-black print:border-black print:text-black w-[15%] p-2 py-3 print:py-1 text-right text-lg print:text-base">निव्वळ मागणी</th>
                 </tr>
               </thead>
               <tbody>
                 {menuItems.map((item: any, idx: number) => {
                   const balance = inventoryBalances[item.item_name] || 0;
+                  const frequency = itemFrequencies[item.id] || 0;
                   const grams = classGroup === 'PRIMARY' ? Number(item.grams_primary) : Number(item.grams_upper_primary);
-                  const required = (enrollmentCount * workingDays * grams) / 1000;
+                  const required = (enrollmentCount * frequency * grams) / 1000;
 
                   return (
                     <tr key={item.id}>
                       <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-center font-normal">{idx + 1}</td>
                       <td className="border border-black print:border-black print:text-black p-2 print:py-1 font-medium">{item.item_name}</td>
+                      <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-center font-bold text-slate-600 bg-slate-50/50">{frequency}</td>
                       <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-right font-normal">{balance.toFixed(3)}</td>
                       <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-right font-normal">{required.toFixed(3)}</td>
                       <td className="border border-black print:border-black print:text-black p-2 print:py-1 text-right font-bold text-lg print:text-base bg-gray-50 print:bg-transparent">
@@ -387,7 +463,7 @@ export default function StockDemandReport() {
                 })}
                 {menuItems.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="border border-black print:border-black print:text-black p-6 text-center text-gray-500 italic">No menu items configured...</td>
+                    <td colSpan={6} className="border border-black print:border-black print:text-black p-6 text-center text-gray-500 italic">No menu items configured...</td>
                   </tr>
                 )}
               </tbody>

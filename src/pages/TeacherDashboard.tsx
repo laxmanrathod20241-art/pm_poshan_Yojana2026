@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/apiClient';
 import type { Database } from '../types/database.types';
 import Layout from '../components/Layout';
+import { useAuth } from '../contexts/AuthProvider';
 
 type EnrollmentRow = Database['public']['Tables']['student_enrollment']['Row'];
 type DailyLogRow = Database['public']['Tables']['daily_logs']['Row'];
@@ -18,37 +19,30 @@ import {
   ChevronUp
 } from 'lucide-react';
 import DailyLogForm from '../components/DailyLogForm';
+import SubscriptionStatus from '../components/SubscriptionStatus';
+import { getCurrentStock } from '../utils/inventoryUtils';
 
 export default function TeacherDashboard() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const userId = user?.id || null;
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
   const [selectedLogDate, setSelectedLogDate] = useState<string>('');
-
+  
+  // Missing states restored
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
-  const [dailyLogsData, setDailyLogsData] = useState<any[]>([]);
-  const [calendarLoading, setCalendarLoading] = useState(true);
-  const [todayMenu, setTodayMenu] = useState<any>(null);
-  const [totalMealsMonth, setTotalMealsMonth] = useState(0);
-  
-  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [dailyLogsData, setDailyLogsData] = useState<DailyLogRow[]>([]);
+  const [totalPrimaryMonth, setTotalPrimaryMonth] = useState(0);
+  const [totalUpperMonth, setTotalUpperMonth] = useState(0);
+  const [inventoryItems, setInventoryItems] = useState<StockRow[]>([]);
   const [enrollment, setEnrollment] = useState({ primary: 0, upper: 0 });
   const [foodGramsMap, setFoodGramsMap] = useState<Record<string, {primary: number, upper: number}>>({});
-  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
-  
-  // Section Configuration
-  const [hasPrimary, setHasPrimary] = useState<boolean>(true);
-  const [hasUpperPrimary, setHasUpperPrimary] = useState<boolean>(true);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) setUserId(session.user.id);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserId(session?.user?.id || null);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
+  const [hasPrimary, setHasPrimary] = useState(true);
+  const [hasUpperPrimary, setHasUpperPrimary] = useState(true);
+  const [todayMenu, setTodayMenu] = useState<ScheduleRowDB | null>(null);
+  const [weeklySchedule, setWeeklySchedule] = useState<ScheduleRowDB[]>([]);
+  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
 
   useEffect(() => {
     if (userId) {
@@ -64,7 +58,8 @@ export default function TeacherDashboard() {
       fetchTodayMenu(),
       fetchEnrollment(),
       fetchMenuGrams(),
-      fetchConfiguration()
+      fetchConfiguration(),
+      fetchWeeklySchedule()
     ]);
     setCalendarLoading(false);
   };
@@ -78,7 +73,7 @@ export default function TeacherDashboard() {
       const endLocal = new Date(selectedYear, selectedMonth + 1, 0);
       const endOfMonth = `${endLocal.getFullYear()}-${String(endLocal.getMonth() + 1).padStart(2, '0')}-${String(endLocal.getDate()).padStart(2, '0')}`;
 
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from('daily_logs')
         .select('log_date, meals_served_primary, meals_served_upper_primary, is_holiday')
         .eq('teacher_id', userId!)
@@ -90,10 +85,16 @@ export default function TeacherDashboard() {
         const rows = data as DailyLogRow[];
         setDailyLogsData(rows);
         
-        const total = rows.reduce((sum: number, log: DailyLogRow) => 
-          sum + (log.meals_served_primary || 0) + (log.meals_served_upper_primary || 0), 0
-        );
-        setTotalMealsMonth(total);
+        let primaryTotal = 0;
+        let upperTotal = 0;
+        
+        rows.forEach((log: DailyLogRow) => {
+          primaryTotal += (log.meals_served_primary || 0);
+          upperTotal += (log.meals_served_upper_primary || 0);
+        });
+
+        setTotalPrimaryMonth(primaryTotal);
+        setTotalUpperMonth(upperTotal);
       }
     } catch (err: any) {
       console.error('Error fetching logs:', err.message);
@@ -102,12 +103,27 @@ export default function TeacherDashboard() {
 
   const fetchInventory = async () => {
     try {
-      const { data, error } = await supabase
-        .from('inventory_stock')
-        .select('*')
-        .eq('teacher_id', userId!);
-      if (error) throw error;
-      setInventoryItems(data as StockRow[] || []);
+      if (!userId) return;
+      
+      // Get all menu items first to have names/codes
+      const { data: menuData } = await api.from('menu_master').select('item_name, item_code, grams_primary, grams_upper_primary').eq('teacher_id', userId);
+      if (!menuData) return;
+
+      // Reconstruct balances for both groups to show a unified view on dashboard
+      // Or we can just sum them up. Usually dashboard wants a global view.
+      const pStock = await getCurrentStock(userId, menuData as any, 'primary');
+      const uStock = await getCurrentStock(userId, menuData as any, 'upper_primary');
+
+      const unifiedItems = (menuData as any[]).map(m => {
+        const balance = (pStock[m.item_name] || 0) + (uStock[m.item_name] || 0);
+        return {
+          id: m.item_code || m.item_name,
+          item_name: m.item_name,
+          current_balance: balance
+        };
+      }).filter(item => item.current_balance !== 0);
+
+      setInventoryItems(unifiedItems as any[]);
     } catch (err: any) {
       console.error('Error fetching inventory:', err.message);
     }
@@ -115,7 +131,7 @@ export default function TeacherDashboard() {
 
   const fetchEnrollment = async () => {
     try {
-      const { data } = await supabase
+      const { data } = await api
         .from('student_enrollment')
         .select('*')
         .eq('teacher_id', userId!)
@@ -132,7 +148,7 @@ export default function TeacherDashboard() {
 
   const fetchMenuGrams = async () => {
     try {
-      const { data } = await supabase
+      const { data } = await api
         .from('menu_master')
         .select('item_name, item_code, grams_primary, grams_upper_primary')
         .eq('teacher_id', userId!);
@@ -150,7 +166,7 @@ export default function TeacherDashboard() {
 
   const fetchConfiguration = async () => {
     try {
-      const { data } = await supabase
+      const { data } = await api
         .from('profiles')
         .select('has_primary, has_upper_primary')
         .eq('id', userId!)
@@ -161,6 +177,16 @@ export default function TeacherDashboard() {
         setHasPrimary(config.has_primary ?? true);
         setHasUpperPrimary(config.has_upper_primary ?? true);
       }
+    } catch (err) { console.error(err); }
+  };
+
+  const fetchWeeklySchedule = async () => {
+    try {
+      const { data } = await api
+        .from('menu_weekly_schedule')
+        .select('*')
+        .eq('teacher_id', userId!);
+      if (data) setWeeklySchedule(data as ScheduleRowDB[]);
     } catch (err) { console.error(err); }
   };
 
@@ -176,7 +202,7 @@ export default function TeacherDashboard() {
       const weekNumber = Math.ceil(days / 7);
       const scheduleType = weekNumber % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
 
-      const { data, error } = await (supabase as any)
+      const { data, error } = await api
         .from('menu_weekly_schedule')
         .select('*')
         .eq('teacher_id', userId!)
@@ -198,8 +224,8 @@ export default function TeacherDashboard() {
     return inventoryItems.filter((item: any) => {
       const grams = foodGramsMap[item.item_name] || { primary: 100, upper: 150 };
       const dailyRequirement = (
-        (hasPrimary ? enrollment.primary : 0) * grams.primary + 
-        (hasUpperPrimary ? enrollment.upper : 0) * grams.upper
+        (hasPrimary ? (enrollment?.primary || 0) : 0) * (grams?.primary || 0) + 
+        (hasUpperPrimary ? (enrollment?.upper || 0) : 0) * (grams?.upper || 0)
       ) / 1000;
       const daysRemaining = dailyRequirement > 0 ? (Number(item.current_balance) / dailyRequirement) : Infinity;
       return daysRemaining <= 10; // Items with < 10 days remaining are "Alert" items
@@ -211,17 +237,33 @@ export default function TeacherDashboard() {
       <div className="w-[95%] max-w-[1400px] mx-auto mt-6 z-10 relative pb-10">
         
         {/* Superior Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-end mb-6 gap-4">
-          <div className="flex gap-4">
-            <div className="bg-white p-3.5 border border-slate-200 shadow-sm flex items-center gap-3 min-w-[180px]">
-              <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
-                <TrendingUp size={20} />
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+          <div className="flex-1 max-w-sm">
+            <SubscriptionStatus />
+          </div>
+          <div className="flex flex-wrap gap-4">
+            {hasPrimary && (
+              <div className="bg-white/80 backdrop-blur-xl p-3.5 border border-white rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.05)] flex items-center gap-3 min-w-[160px]">
+                <div className="p-2 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-100">
+                  <TrendingUp size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase mb-0.5">Primary (1-5)</p>
+                  <p className="text-xl font-black text-slate-800">{totalPrimaryMonth}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase mb-0.5">Meals This Month</p>
-                <p className="text-xl font-black text-slate-800">{totalMealsMonth}</p>
+            )}
+            {hasUpperPrimary && (
+              <div className="bg-white/80 backdrop-blur-xl p-3.5 border border-white rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.05)] flex items-center gap-3 min-w-[160px]">
+                <div className="p-2 bg-[#474379] text-white rounded-xl shadow-lg shadow-indigo-100">
+                  <TrendingUp size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase mb-0.5">Upper (6-8)</p>
+                  <p className="text-xl font-black text-slate-800">{totalUpperMonth}</p>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -280,8 +322,8 @@ export default function TeacherDashboard() {
                       const balance = Number(item.current_balance);
                       const grams = foodGramsMap[item.item_name] || { primary: 100, upper: 150 };
                       const dailyRequirement = (
-                        (hasPrimary ? enrollment.primary : 0) * grams.primary + 
-                        (hasUpperPrimary ? enrollment.upper : 0) * grams.upper
+                        (hasPrimary ? (enrollment?.primary || 0) : 0) * (grams?.primary || 0) + 
+                        (hasUpperPrimary ? (enrollment?.upper || 0) : 0) * (grams?.upper || 0)
                       ) / 1000;
                       const daysRemaining = dailyRequirement > 0 ? (balance / dailyRequirement) : Infinity;
 
@@ -416,28 +458,61 @@ export default function TeacherDashboard() {
                         for (let d = 1; d <= daysInMonth; d++) {
                           const dateStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                           const matchedLog = dailyLogsData.find((log: any) => log.log_date === dateStr);
-                          const isSubmitted = !!matchedLog;
+                          
+                          // 🧩 Section-Aware Submission Logic
+                          // A day is only "DONE" if the currently active sections have been served.
+                          const isSubmitted = (() => {
+                            if (!matchedLog) return false;
+                            if (matchedLog.is_holiday) return true;
+                            
+                            const servedPrimary = (matchedLog.meals_served_primary || 0) > 0;
+                            const servedUpper = (matchedLog.meals_served_upper_primary || 0) > 0;
+                            
+                            if (hasPrimary && hasUpperPrimary) return servedPrimary && servedUpper;
+                            if (hasPrimary) return servedPrimary;
+                            if (hasUpperPrimary) return servedUpper;
+                            
+                            return true;
+                          })();
+
                           const isHoliday = matchedLog?.is_holiday || false;
-                          const totalMeals = matchedLog ? (Number(matchedLog.meals_served_primary) || 0) + (Number(matchedLog.meals_served_upper_primary) || 0) : 0;
+                          const totalMeals = matchedLog ? 
+                            ((hasPrimary ? Number(matchedLog.meals_served_primary) || 0 : 0) + 
+                             (hasUpperPrimary ? Number(matchedLog.meals_served_upper_primary) || 0 : 0)) : 0;
+                          
                           const isToday = dateStr === today;
                           const isPast = dateStr < today;
                           const isFuture = dateStr > today;
+
+                          const dateObj = new Date(selectedYear, selectedMonth, d);
+                          const dayOfWeek = dateObj.getDay();
+                          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                          const stringDay = dayNames[dayOfWeek];
+                          
+                          // Weekly Schedule Pattern Logic
+                          const yearStart = new Date(selectedYear, 0, 1);
+                          const diffDays = Math.floor((dateObj.getTime() - yearStart.getTime()) / (24 * 60 * 60 * 1000));
+                          const weekNum = Math.ceil((diffDays + 1) / 7);
+                          const weekPattern = weekNum % 2 === 0 ? 'WEEK_2_4' : 'WEEK_1_3_5';
+                          
+                          const scheduledDay = weeklySchedule.find(s => s.week_pattern === weekPattern && s.day_name === stringDay);
+                          const isInactiveDay = scheduledDay ? !scheduledDay.is_active : false;
 
                           let style = "bg-white border-slate-100 text-slate-400";
                           let statusText = "-";
                           let labelStyle = "text-slate-400";
 
-                          if (isHoliday) {
-                            style = "bg-amber-400 border-amber-500 text-amber-950 shadow-lg shadow-amber-100 ring-2 ring-white";
-                            statusText = "सुट्टी";
-                            labelStyle = "text-amber-950/60";
+                          if (isHoliday || (isInactiveDay && !isSubmitted && !isFuture)) {
+                            style = "bg-amber-50/50 border-amber-200 text-amber-700 shadow-sm";
+                            statusText = "सुट्टी (SUTTI)";
+                            labelStyle = "text-amber-600/60";
                           } else if (isSubmitted) {
                             style = "bg-[#00a65a] border-green-600 text-white shadow-lg shadow-green-100 ring-2 ring-white";
                             statusText = "DONE";
                             labelStyle = "text-white/70";
                           } else if (isToday) {
                             style = "bg-blue-600 border-blue-700 text-white shadow-xl shadow-blue-100 ring-2 ring-white scale-105 z-10 animate-pulse";
-                            statusText = "TODAY";
+                            statusText = isInactiveDay ? "TODAY (SUTTI)" : "TODAY";
                             labelStyle = "text-white/70";
                           } else if (isPast) {
                             style = "bg-red-50 border-red-100 text-red-600 ring-2 ring-white";
